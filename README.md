@@ -47,6 +47,8 @@ USB memakai port native ESP32-S3 (GPIO 19/20).
 3. Buka `S3Air_USB.ino` di Arduino IDE, samakan setting di atas, upload.
 4. Buka `http://mbahdac.local` dari HP / PC di WiFi yang sama.
 
+Panduan lengkap (panel, serial, troubleshooting): [PANDUAN.md](PANDUAN.md).
+
 Kredensial juga bisa diganti belakangan dari tab Sistem di panel web
 (tersimpan di NVS alat dan menimpa isi `wifi_config.h`).
 

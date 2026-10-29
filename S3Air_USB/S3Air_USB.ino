@@ -1,24 +1,9 @@
 // ============================================================
-//  S3 Air v3.1 - USB DAC + DSP Console
-//  ESP32-S3 (N16R8) + PCM5102 | USB Audio Class 1, 24-bit / 48 kHz
-//  DSP jalan di task FreeRTOS khusus (Core 1); USB <-> DSP lewat
-//  ring buffer SPSC. Kontrol: panel web gaya mixer (acuan X Air)
-//  via WiFi rumah (STA, selalu nyala) + perintah serial Serial0.
-//
-//  PENTING - setting Arduino IDE (terbukti jalan di Windows):
-//    Board            : ESP32S3 Dev Module
-//    USB Mode         : USB-OTG (TinyUSB)
-//    USB CDC On Boot  : DISABLED   <-- WAJIB. CDC+Audio komposit
-//                       membuat driver usbaudio.sys Windows gagal
-//                       start (Code 10). Debug serial via Serial0
-//                       (port COM/UART satunya), seperti DrumCore.
-//    PSRAM            : OPI PSRAM
-//    Flash Size       : 16MB
-//    Core             : esp32 3.3.12
-//
-//  Pin I2S (rakitan user): BCK = GPIO42, LRCK = GPIO21, DIN = GPIO2
-//  PCM5102 mode PLL (SCK ke GND), tanpa MCLK.
-//  Repo: github.com/fvbryyy/S3air
+//  S3 Air - USB DAC + DSP Console
+//  ESP32-S3 (N16R8) + PCM5102 | USB Audio 24-bit / 48 kHz
+//  DSP di task FreeRTOS (Core 1); kontrol panel web + serial.
+//  Versi firmware: FW_VERSION di bawah. Panduan lengkap,
+//  setting IDE & wiring: lihat PANDUAN.md di repo ini.
 // ============================================================
 
 #include <Arduino.h>
@@ -1419,10 +1404,8 @@ static void setupWeb() {
 
 
 // ============================================================
-//  Kontrol serial (port COM / Serial0) — kanal kedua ala DQ-DSP
-//  Satu perintah per baris. Contoh:
-//    set vol=0.8 mute=0        set b0_g=3 b0_f=100 b0_on=1
-//    set g12=4 (GEQ)           preset Bass | upreset 2 | save 2 | state
+//  Kontrol serial (Serial0) - kanal kedua sejajar panel web.
+//  Satu perintah per baris; daftar lengkap di PANDUAN.md.
 // ============================================================
 static bool serSetOne(const String &kv) {
   int eq = kv.indexOf('=');
@@ -1537,7 +1520,7 @@ void setup() {
   loadWifiCreds();
   setupWeb();
   wifiStart();
-  Serial0.println("[USB] MbahDAC " FW_VERSION " siap — tunggu Windows memilih 'MbahDAC USB'.");
+  Serial0.println("[USB] " FW_VERSION " siap — tunggu Windows memilih 'MbahDAC USB'.");
 }
 
 void loop() {
