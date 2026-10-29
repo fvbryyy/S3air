@@ -103,6 +103,7 @@ ceiling xfOn xfAmt width mono balance dlyL dlyR`, per band
 
 ## 8. Riwayat versi
 
+- **v3.5 S3 Air** - perbaikan meter VU: kolom meter L/R di kanan spektrum akhirnya tampil (rantai tinggi CSS-nya putus sehingga kolom menyusut ~0px dan isinya bergerak di ruang tak terlihat; kini kolom mengisi penuh tinggi display). Bukti uji: data /api/meter sehat - **v3.4 S3 Air** kode panel terbukti menerapkan nilai dengan benar di pengujian lokal. Di HP, pill info WiFi disembunyikan agar pill CLIP tidak terdesak keluar layar.
 - **v3.4 S3 Air** - tata letak HP dirapikan total: halaman jadi satu kolom yang bisa di-scroll wajar (tidak lagi dipaksa seukuran layar), header - **v3.3 S3 Air** chip band satu baris bisa digeser, grafik 290px sehingga meter VU L/R di kanan spektrum tampil penuh - **v3.3 S3 Air** bergerak, bank fader lengket di bawah layar dengan strip MAIN selalu terjangkau di kanan.
 - **v3.3 S3 Air** - spektrum (RTA) dibuat hidup: balistik analyzer beneran (serangan seketika, jatuh +-22 dB/detik, puncak per band), bar jatuh ke lantai saat audio berhenti (tidak membeku lagi), panel mengambil data 150 ms + interpolasi gerak halus di layar.
 - **v3.2 S3 Air** - perbaikan bunyi: jalur audio dikembalikan ke 16-bit/48 kHz penuh (UAC + I2S + DSP). Jalur 24-bit v3.0-v3.1 terbukti tidak mengalirkan audio di ESP32-S3 (core hanya mendukung UAC 16-bit di S3; 24-bit khusus ESP32-P4, sesuai contoh resmi core).
