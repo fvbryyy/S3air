@@ -1,9 +1,11 @@
 // ============================================================
-//  MbahDAC FINAL v2.0 — USB DAC + DSP Console
-//  ESP32-S3 + PCM5102 | USB Audio Class 1 (48 kHz / 16-bit)
-//  Kontrol: web konsol gaya mixer digital via WiFi rumah (STA)
+//  S3 Air v3.1 - USB DAC + DSP Console
+//  ESP32-S3 (N16R8) + PCM5102 | USB Audio Class 1, 24-bit / 48 kHz
+//  DSP jalan di task FreeRTOS khusus (Core 1); USB <-> DSP lewat
+//  ring buffer SPSC. Kontrol: panel web gaya mixer (acuan X Air)
+//  via WiFi rumah (STA, selalu nyala) + perintah serial Serial0.
 //
-//  PENTING — setting Arduino IDE (terbukti jalan di Windows):
+//  PENTING - setting Arduino IDE (terbukti jalan di Windows):
 //    Board            : ESP32S3 Dev Module
 //    USB Mode         : USB-OTG (TinyUSB)
 //    USB CDC On Boot  : DISABLED   <-- WAJIB. CDC+Audio komposit
@@ -16,6 +18,7 @@
 //
 //  Pin I2S (rakitan user): BCK = GPIO42, LRCK = GPIO21, DIN = GPIO2
 //  PCM5102 mode PLL (SCK ke GND), tanpa MCLK.
+//  Repo: github.com/fvbryyy/S3air
 // ============================================================
 
 #include <Arduino.h>
@@ -41,7 +44,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v3.0 Gabungan"
+#define FW_VERSION "v3.1 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -727,443 +730,590 @@ static String stateJson() {
 // Halaman web disisipkan saat build (webpage.html -> PAGE)
 static const char PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
 <html lang="id"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>MbahDAC — Digital Console</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>S3 Air — Konsol DSP</title>
 <style>
+:root{--bg:#101010;--panel:#1c1c1e;--panel2:#242426;--line:#3a3a3c;--txt:#e8e8e8;--dim:#9a9aa0;
+--teal:#12b5cb;--teal2:#0e7c86;--org:#e8930c;--blue:#2b5ea7;--yel:#ffd21f;--red:#e03131;--grn:#37b24d;
+--mono:"Courier New",monospace}
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#0a0c0f;--panel:#13161b;--panel2:#0e1014;--line:#232830;--txt:#e0e7ef;--dim:#7f8c9a;--cy:#2ea3e0;--am:#f0a51e;--gn:#3ecf6e;--rd:#e5484d;--radius:10px}
-html{scroll-behavior:smooth}
-body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--txt);min-height:100dvh;-webkit-font-smoothing:antialiased}
-::-webkit-scrollbar{width:6px;height:6px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
-header{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:12px 18px;background:linear-gradient(180deg,#181b21 0%,#0f1115 100%);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:100;backdrop-filter:blur(10px)}
-.logo{font-size:22px;font-weight:900;letter-spacing:.5px}
-.logo span{color:var(--cy)}
-.logo small{display:block;font-size:8.5px;font-weight:700;letter-spacing:3px;color:var(--dim);margin-top:2px;text-transform:uppercase}
-.pills{display:flex;gap:6px;flex-wrap:wrap}
-.pill{font-size:10.5px;background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:6px;padding:5px 10px;color:var(--dim);white-space:nowrap;backdrop-filter:blur(4px)}
-.pill b{color:var(--gn);font-weight:700}
-nav{display:flex;gap:3px;padding:8px 18px 0;flex-wrap:wrap;border-bottom:1px solid var(--line)}
-nav button{background:transparent;color:var(--dim);border:none;border-bottom:2px solid transparent;padding:10px 16px;font-size:11.5px;font-weight:700;letter-spacing:1.2px;cursor:pointer;transition:all .2s;text-transform:uppercase}
-nav button:hover{color:var(--txt)}
-nav button.act{color:var(--cy);border-bottom-color:var(--cy)}
-.wrap{display:flex;gap:14px;padding:14px 18px;align-items:flex-start;max-width:1400px;margin:0 auto}
-#pages{flex:1;min-width:0}
-.page{display:none}.page.act{display:block}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-bottom:14px;transition:border-color .2s}
-.card:hover{border-color:#333a44}
-.card h2{font-size:10.5px;margin:0 0 12px;color:var(--cy);letter-spacing:2.5px;font-weight:800;text-transform:uppercase;display:flex;align-items:center;gap:8px}
-.card h2::before{content:'';width:3px;height:14px;background:var(--cy);border-radius:2px;display:inline-block}
-canvas{width:100%;height:200px;display:block;background:var(--panel2);border-radius:8px;border:1px solid var(--line)}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px 28px}
-.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 20px}
-@media(max-width:900px){.grid2,.grid3{grid-template-columns:1fr}}
-.row{display:flex;align-items:center;gap:10px;margin:6px 0;min-height:36px}
-.row label{flex:0 0 130px;font-size:12px;color:var(--dim);font-weight:500}
-.row input[type=range]{flex:1;accent-color:var(--cy);height:22px;min-width:50px;cursor:pointer}
-.row .val{flex:0 0 68px;text-align:right;font-variant-numeric:tabular-nums;font-size:12px;color:var(--am);font-weight:600}
-select,input[type=number],input[type=text],input[type=password]{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:7px 8px;font-size:12px;transition:border-color .2s;outline:none}
-select:focus,input:focus{border-color:var(--cy)}
-input[type=checkbox]{accent-color:var(--cy);width:16px;height:16px;cursor:pointer}
-button.btn{background:linear-gradient(135deg,var(--cy),#1b8ec7);color:#fff;border:0;border-radius:8px;padding:10px 16px;font-weight:700;margin:3px 2px;cursor:pointer;font-size:12px;transition:transform .1s,box-shadow .2s;box-shadow:0 2px 8px rgba(46,163,224,.25)}
-button.btn:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(46,163,224,.35)}
-button.btn:active{transform:scale(.97)}
-button.ghost{background:rgba(255,255,255,.05);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:9px 14px;margin:3px 2px;cursor:pointer;font-size:12px;font-weight:500;transition:all .2s}
-button.ghost:hover{background:rgba(255,255,255,.08);border-color:#444}
-button.ghost.on{background:var(--am);color:#171106;font-weight:700;border-color:var(--am);box-shadow:0 2px 8px rgba(240,165,30,.3)}
-button.ghost.red.on{background:var(--rd);border-color:var(--rd);color:#fff;box-shadow:0 2px 8px rgba(229,72,77,.3)}
-#strips,#gstrips{display:flex;gap:8px;overflow-x:auto;padding:6px 2px 12px;scroll-snap-type:x mandatory}
-.strip{flex:0 0 100px;background:var(--panel2);border:1px solid var(--line);border-radius:var(--radius);padding:0 8px 10px;text-align:center;overflow:hidden;scroll-snap-align:start;transition:opacity .2s,border-color .2s}
-.strip:hover{border-color:#444}
-.strip .scr{margin:0 -8px 8px;padding:5px 2px;font-size:10px;font-weight:800;letter-spacing:.5px;color:#0a0c0e}
-.strip select{width:100%;padding:4px;font-size:10.5px;margin-bottom:5px}
-.strip input[type=range].vert{writing-mode:vertical-lr;direction:rtl;width:28px;height:120px;accent-color:var(--ac,#f0a51e)}
-.strip .gv{font-size:11.5px;font-variant-numeric:tabular-nums;margin:5px 0 3px;color:var(--am);font-weight:700}
-.strip input[type=number]{width:68px;padding:3px 4px;font-size:11px;margin:2px 0}
-.strip .lb{font-size:9px;color:var(--dim);margin:1px 0}
-.strip .dynbox{border-top:1px dashed #2a2f38;margin-top:8px;padding-top:6px;display:none}
-.strip .dynbox.open{display:block}
-.strip.off{opacity:.3}
-.gstrip{flex:0 0 40px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:5px 2px;text-align:center;scroll-snap-align:start;transition:border-color .2s}
-.gstrip:hover{border-color:#444}
-.gstrip .gf{font-size:8.5px;color:var(--dim);font-weight:600}
-.gstrip input[type=range].vert{writing-mode:vertical-lr;direction:rtl;width:20px;height:100px;accent-color:var(--cy)}
-.gstrip .gv{font-size:9.5px;color:var(--am);font-variant-numeric:tabular-nums;font-weight:600}
-#rail{flex:0 0 124px;background:linear-gradient(180deg,#181b21 0%,#0f1115 100%);border:1px solid var(--line);border-radius:var(--radius);padding:14px 10px;text-align:center;position:sticky;top:70px}
-#rail h2{font-size:10.5px;color:var(--cy);margin:0 0 10px;letter-spacing:2.5px;font-weight:800}
-#rail input[type=range].vert{writing-mode:vertical-lr;direction:rtl;width:38px;height:180px;accent-color:var(--am)}
-.meters{display:flex;gap:8px;justify-content:center;margin:10px 0}
-.mcol{width:16px}
-.mbar{height:120px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;display:flex;flex-direction:column-reverse;overflow:hidden;position:relative}
-.mbar>i{display:block;width:100%;background:linear-gradient(0deg,#2fbf5a 55%,#f0a51e 78%,#e5484d 95%);height:0%;transition:height .15s linear}
-.mcol span{font-size:9px;color:var(--dim);font-weight:600}
-#rail .rbtn{width:100%;margin:4px 0;padding:9px 0;font-size:11px;font-weight:600;border-radius:8px}
-.grwrap{background:var(--panel2);border:1px solid var(--line);border-radius:6px;height:18px;overflow:hidden}
-.grbar{height:100%;width:0%;background:linear-gradient(90deg,#f0a51e,#e5484d);float:right;transition:width .2s}
-table.info{border-collapse:collapse;font-size:12px;width:100%}
-table.info td{padding:6px 16px 6px 0;color:#c6d2de;border-bottom:1px solid var(--line)}
-table.info td:first-child{color:var(--dim);font-weight:500;white-space:nowrap}
-table.info tr:last-child td{border-bottom:none}
-small{color:var(--dim);line-height:1.6;font-size:11px}
-.slot{display:flex;align-items:center;gap:8px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:5px 0;transition:border-color .2s}
-.slot:hover{border-color:#444}
-.slot b{flex:0 0 70px;font-size:12px;font-weight:700}
-.slot .st{flex:1;font-size:11px;color:var(--dim)}
-.slot.full .st{color:var(--gn);font-weight:500}
-@media(max-width:760px){
-  .wrap{flex-direction:column;padding:10px 12px}
-  #rail{flex:none;width:100%;position:static;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:center;order:-1}
-  #rail input[type=range].vert{height:80px}
-  .mbar{height:60px}
-  header{padding:10px 12px}
-  nav{padding:6px 12px 0}
-  nav button{padding:8px 12px;font-size:10.5px}
-  .strip{flex:0 0 88px}
-  .gstrip{flex:0 0 36px}
+html,body{background:var(--bg);color:var(--txt);font-family:Arial,Helvetica,sans-serif;font-size:13px}
+body{display:flex;flex-direction:column;min-height:100vh;overflow-x:hidden}
+button{font-family:inherit;cursor:pointer}
+input,select{font-family:inherit}
+/* ===== top bar ===== */
+#topbar{display:flex;align-items:stretch;gap:2px;background:linear-gradient(180deg,#26262a,#17171a);border-bottom:2px solid #000;padding:4px 6px;flex-wrap:wrap}
+#logo{display:flex;flex-direction:column;justify-content:center;padding:2px 12px 2px 4px;border-right:1px solid var(--line);margin-right:4px}
+#logo b{font-size:17px;letter-spacing:1px;color:#fff}
+#logo b span{color:var(--teal)}
+#logo small{color:var(--dim);font-size:9px;letter-spacing:2px}
+.tabbtn{display:flex;flex-direction:column;align-items:center;gap:1px;background:#222225;color:#cfcfcf;border:1px solid #333;border-bottom:3px solid #333;border-radius:3px;padding:4px 13px;font-size:11px;min-width:58px}
+.tabbtn svg{width:17px;height:17px;stroke:#cfcfcf;fill:none;stroke-width:1.7}
+.tabbtn.act{background:#2c2f33;border-bottom:3px solid var(--teal);color:#fff}
+.tabbtn.act svg{stroke:var(--teal)}
+#topright{margin-left:auto;display:flex;align-items:center;gap:8px}
+#netpill{background:#0d2b30;color:#7fe3f0;border:1px solid var(--teal2);border-radius:3px;padding:4px 8px;font-size:11px}
+#cliplamp{background:#2a0f0f;color:#ff8787;border:1px solid #5c1a1a;border-radius:3px;padding:4px 8px;font-size:11px}
+#cliplamp b{font-family:var(--mono)}
+/* ===== work area ===== */
+#work{flex:1;display:flex;gap:6px;padding:6px;min-height:0}
+#leftcol{width:172px;flex:none;display:flex;flex-direction:column;gap:6px}
+#stage{flex:1;display:flex;flex-direction:column;gap:6px;min-width:0}
+#rightrail{width:158px;flex:none;display:flex;flex-direction:column;gap:6px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:7px}
+.card h4{font-size:10px;letter-spacing:1.5px;color:var(--dim);border-bottom:1px solid var(--line);padding-bottom:4px;margin-bottom:6px;font-weight:bold}
+#scribble{background:var(--yel);color:#111;font-weight:bold;font-size:16px;text-align:center;border-radius:3px;padding:7px 2px;letter-spacing:.5px}
+.kv{display:flex;justify-content:space-between;align-items:center;margin:4px 0;gap:4px}
+.kv label{color:var(--dim);font-size:11px}
+.kv output{font-family:var(--mono);font-size:11px;color:#fff}
+input[type=number]{width:62px;background:#0c0c0d;border:1px solid var(--line);color:#fff;border-radius:3px;padding:3px 4px;font-family:var(--mono);font-size:12px;text-align:right}
+select{background:#0c0c0d;border:1px solid var(--line);color:#fff;border-radius:3px;padding:3px;font-size:11px}
+input[type=range]{accent-color:var(--teal)}
+input[type=range].h{width:100%}
+.tgl{background:#2b2b2e;border:1px solid var(--line);color:#bbb;border-radius:3px;padding:3px 9px;font-size:11px}
+.tgl.on{background:var(--teal2);color:#fff;border-color:var(--teal)}
+.tgl.red.on{background:#8c1d1d;border-color:var(--red)}
+.tgl.yel.on{background:#8a6d00;border-color:var(--yel)}
+/* display */
+#dispwrap{display:flex;gap:6px;background:#000;border:1px solid var(--line);border-radius:4px;padding:6px}
+#graph{flex:1;width:100%;height:300px;display:block;touch-action:none;cursor:crosshair;min-width:0}
+#dispmeter{width:30px;flex:none;display:flex;gap:3px}
+.mcol{flex:1;background:#0a0a0a;border:1px solid #26262a;position:relative;overflow:hidden}
+.mfill{position:absolute;left:0;right:0;bottom:0;height:0%;background:linear-gradient(180deg,#ff5252 0%,#ffd43b 18%,#37b24d 45%)}
+.mlab{font-size:8px;color:var(--dim);text-align:center;margin-top:2px}
+/* band bar */
+#bandbar{min-height:118px}
+.chips{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:7px}
+.chip{border:1px solid var(--line);background:#26262a;color:#ddd;border-radius:3px;padding:4px 0;font-size:11px;flex:1;min-width:44px;text-align:center;border-top:3px solid #666}
+.chip.sel{background:#33363b;outline:1px solid var(--teal);color:#fff}
+.chip.off{opacity:.38}
+.boxes{display:flex;gap:6px;flex-wrap:wrap}
+.box{background:var(--panel2);border:1px solid var(--line);border-radius:3px;padding:5px 8px;min-width:86px}
+.box h5{font-size:9px;letter-spacing:1px;color:var(--dim);margin-bottom:3px}
+.box .row{display:flex;align-items:center;gap:4px}
+.box output{font-family:var(--mono);font-size:13px}
+.box small{color:var(--dim)}
+#grwrap{background:#0c0c0d;border:1px solid var(--line);height:12px;border-radius:2px;overflow:hidden}
+#grbar{height:100%;width:0%;background:linear-gradient(90deg,#37b24d,#ffd43b,#ff5252)}
+/* right rail */
+.util{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+.util button{background:#26262a;border:1px solid var(--line);color:#ddd;border-radius:3px;padding:6px 2px;font-size:11px}
+.util button:hover{border-color:var(--teal)}
+#mainbox{text-align:center}
+#mainbox .scrib{background:var(--teal);color:#04222b;font-weight:bold;border-radius:3px;padding:4px;font-size:13px;margin-bottom:6px}
+input.vfader{writing-mode:vertical-lr;direction:rtl;width:26px;height:150px;accent-color:var(--teal)}
+#volDb{font-family:var(--mono);font-size:15px;margin:4px 0}
+.mrow{display:flex;gap:4px;justify-content:center}
+/* footer fader bank */
+#faderbank{display:flex;gap:4px;background:linear-gradient(180deg,#1b1b1e,#121214);border-top:2px solid #000;padding:6px;overflow-x:auto;align-items:stretch}
+.strip{flex:0 0 64px;background:var(--panel);border:1px solid #2c2c2e;border-radius:3px;display:flex;flex-direction:column;align-items:center;padding:4px 2px;gap:3px}
+.strip .scrib{width:100%;text-align:center;font-size:10px;font-weight:bold;color:#111;border-radius:2px;padding:2px 0}
+.strip .val{font-family:var(--mono);font-size:10px;color:#fff}
+.strip input.vfader{height:110px;width:22px}
+.strip .onled{width:100%;font-size:9px;padding:2px 0}
+.strip.sel{outline:1px solid var(--teal)}
+.strip.off{opacity:.45}
+.strip.gq{flex:0 0 40px}
+.strip.gq input.vfader{height:96px;width:18px}
+#masterstrip{flex:0 0 84px;background:#26262a;border:1px solid var(--teal2)}
+#masterstrip .scrib{background:var(--red);color:#fff}
+.pg{display:none}.pg.act{display:block}
+.wform{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+.wform input[type=text],.wform input[type=password]{background:#0c0c0d;border:1px solid var(--line);color:#fff;border-radius:3px;padding:5px;flex:1;min-width:120px}
+table.info{border-collapse:collapse;width:100%}
+table.info td{border-bottom:1px solid #2c2c2e;padding:4px 6px;font-size:12px}
+table.info td:first-child{color:var(--dim);width:38%}
+.note{color:var(--dim);font-size:11px;line-height:1.5}
+@media (max-width:900px){
+ #work{flex-direction:column}
+ #leftcol,#rightrail{width:100%;flex-direction:row;flex-wrap:wrap}
+ #leftcol .card,#rightrail .card{flex:1;min-width:150px}
+ #graph{height:230px}
 }
-@media(max-width:480px){
-  .grid2,.grid3{grid-template-columns:1fr}
-  .row label{flex:0 0 100px;font-size:11px}
-  .row .val{flex:0 0 55px;font-size:11px}
-  .strip{flex:0 0 82px}
-  .strip input[type=range].vert{height:90px}
-  canvas{height:160px}
+
+<style>
+/* ===== lapisan USER-FRIENDLY: target sentuh besar, lega, HP-first ===== */
+html,body{font-size:15px}
+.card{padding:12px;border-radius:8px}
+.card h4{font-size:11px;margin-bottom:9px}
+.tabbtn{min-width:76px;min-height:54px;font-size:13px;padding:7px 14px;border-radius:6px}
+.tabbtn svg{width:20px;height:20px}
+#logo b{font-size:19px}
+.kv{margin:8px 0}
+.kv label{font-size:13px}
+.kv output{font-size:13px}
+input[type=number]{width:76px;padding:8px 6px;font-size:14px;border-radius:6px}
+select{padding:8px;font-size:13px;border-radius:6px}
+.tgl{padding:8px 14px;font-size:13px;min-height:40px;border-radius:6px}
+.chip{min-height:44px;font-size:13px;border-radius:6px}
+.box{padding:9px 12px;border-radius:6px;min-width:104px}
+.box h5{font-size:10px;margin-bottom:5px}
+.box output{font-size:15px}
+#graph{height:340px}
+#scribble{font-size:19px;padding:10px 2px;border-radius:6px}
+.strip{flex-basis:78px;padding:7px 3px;border-radius:6px}
+.strip .val{font-size:12px}
+.strip input.vfader{height:132px;width:28px}
+.strip.gq{flex-basis:48px}
+.strip.gq input.vfader{height:112px;width:24px}
+#masterstrip{flex-basis:96px;margin-left:auto}
+input.vfader{height:170px;width:34px}
+#volDb{font-size:18px}
+.util button{padding:10px 2px;font-size:13px;border-radius:6px}
+.note{font-size:12.5px}
+.wform input[type=text],.wform input[type=password]{padding:9px;font-size:14px}
+@media (max-width:900px){
+ #stage{order:1}#rightrail{order:2}#leftcol{order:3}
+ #graph{height:280px}
+ .tabbtn{min-width:64px;padding:6px 8px}
 }
-</style></head><body>
-<header>
-  <div class="logo">Mbah<span>DAC</span><small>Digital Console &bull; USB Audio DSP</small></div>
-  <div class="pills">
-    <span class="pill"><b>USB</b> 48 kHz / 16-bit</span>
-    <span class="pill" id="netpill">WiFi: ...</span>
-    <span class="pill">PCM5102 &bull; 112 dB SNR</span>
-    <span class="pill" id="peakpill">Puncak EQ: - dB</span>
-  </div>
-</header>
-<nav>
-  <button data-tab="eq" class="act">EQUALIZER</button>
-  <button data-tab="dyn">DYNAMICS</button>
-  <button data-tab="out">OUTPUT</button>
-  <button data-tab="preset">PRESET</button>
-  <button data-tab="sys">SYSTEM</button>
-</nav>
-<div class="wrap">
-<div id="pages">
 
-<section class="page act" id="pg-eq">
-  <div class="card"><h2>EQ CURVE + RTA</h2>
-    <canvas id="cv" width="940" height="200"></canvas>
-  </div>
-  <div class="card"><h2>INPUT</h2>
-    <div class="grid3">
-      <div class="row"><label>Preamp</label><input type="range" id="preamp" min="-12" max="6" step="0.5"><span class="val" id="preamp_v"></span></div>
-      <div class="row"><label>Trim Kiri</label><input type="range" id="trimL" min="-12" max="12" step="0.5"><span class="val" id="trimL_v"></span></div>
-      <div class="row"><label>Trim Kanan</label><input type="range" id="trimR" min="-12" max="12" step="0.5"><span class="val" id="trimR_v"></span></div>
-      <div class="row"><label>Balik Fasa</label><span><input type="checkbox" id="polL"> L &nbsp;<input type="checkbox" id="polR"> R</span><span class="val"></span></div>
-      <div class="row"><label>HPF Proteksi</label><input type="checkbox" id="hpfOn"><input type="range" id="hpfFreq" min="20" max="200"><span class="val" id="hpfFreq_v"></span></div>
-      <div class="row"><label>Slope HPF</label><select id="hpfSlope"><option value="6">6 dB/okt</option><option value="12">12 dB/okt</option><option value="18">18 dB/okt</option><option value="24">24 dB/okt</option></select><span class="val"></span></div>
-    </div>
-  </div>
-  <div class="card"><h2 id="eqtitle">PARAMETRIC EQ &mdash; 10 BAND</h2>
-    <div style="margin-bottom:10px;display:flex;gap:6px;flex-wrap:wrap">
-      <button class="ghost" id="modePeq">Parametrik</button>
-      <button class="ghost" id="modeGeq">Grafik 31 Band</button>
-      <button class="ghost" id="flatBtn">Ratakan EQ</button>
-    </div>
-    <div id="strips"></div>
-    <div id="gstrips" style="display:none"></div>
-  </div>
-</section>
+<style>
+#work{display:block}
+#graph{height:360px}
+#masterstrip{flex-basis:112px}
+#masterstrip input.vfader{height:120px}
 
-<section class="page" id="pg-dyn">
-  <div class="card"><h2>NOISE GATE</h2>
-    <div class="row"><label>Gate Aktif</label><input type="checkbox" id="gateOn"><span class="val"></span></div>
-    <div class="grid3">
-      <div class="row"><label>Threshold</label><input type="range" id="gateThr" min="-80" max="-10"><span class="val" id="gateThr_v"></span></div>
-      <div class="row"><label>Attack</label><input type="range" id="gateAtk" min="0.1" max="200" step="0.1"><span class="val" id="gateAtk_v"></span></div>
-      <div class="row"><label>Release</label><input type="range" id="gateRel" min="10" max="1000" step="10"><span class="val" id="gateRel_v"></span></div>
-    </div>
-  </div>
-  <div class="card"><h2>COMPRESSOR</h2>
-    <div class="row"><label>Compressor Aktif</label><input type="checkbox" id="compOn"><span class="val"></span></div>
-    <div class="grid3">
-      <div class="row"><label>Threshold</label><input type="range" id="compThr" min="-48" max="0"><span class="val" id="compThr_v"></span></div>
-      <div class="row"><label>Ratio</label><input type="range" id="compRatio" min="1" max="20" step="0.5"><span class="val" id="compRatio_v"></span></div>
-      <div class="row"><label>Makeup Gain</label><input type="range" id="compMake" min="0" max="24" step="0.5"><span class="val" id="compMake_v"></span></div>
-      <div class="row"><label>Attack</label><input type="range" id="compAtk" min="0.1" max="300" step="0.1"><span class="val" id="compAtk_v"></span></div>
-      <div class="row"><label>Release</label><input type="range" id="compRel" min="10" max="1000" step="10"><span class="val" id="compRel_v"></span></div>
-    </div>
-    <div class="row"><label>Gain Reduction</label><div class="grwrap" style="flex:1"><div class="grbar" id="grbar"></div></div><span class="val" id="gr_v">0 dB</span></div>
-  </div>
-  <div class="card"><h2>LIMITER</h2>
-    <div class="grid2">
-      <div class="row"><label>Limiter Aktif</label><input type="checkbox" id="limiter"><span class="val"></span></div>
-      <div class="row"><label>Ceiling</label><input type="range" id="ceiling" min="-6" max="0" step="0.5"><span class="val" id="ceiling_v"></span></div>
-    </div>
-    <div class="row"><label>Clip Terdeteksi</label><b id="clipct" style="color:var(--rd)">0</b><button class="ghost" id="clipReset" style="padding:6px 10px;font-size:11px">Reset</button></div>
-  </div>
-</section>
-
-<section class="page" id="pg-out">
-  <div class="card"><h2>MASTER OUTPUT</h2>
-    <div class="grid2">
-      <div class="row"><label>Volume Master</label><input type="range" id="vol2" min="0" max="100"><span class="val" id="vol2_v"></span></div>
-      <div class="row"><label>Batas Maks</label><input type="range" id="volMax" min="20" max="100"><span class="val" id="volMax_v"></span></div>
-      <div class="row"><label>Auto Headroom</label><input type="checkbox" id="autoHr"><small style="flex:1">preamp otomatis menahan puncak EQ</small></div>
-      <div class="row"><label>Loudness</label><input type="checkbox" id="loud"><small style="flex:1">kontur Fletcher-Munson</small></div>
-    </div>
-  </div>
-  <div class="card"><h2>STEREO &amp; ALIGNMENT</h2>
-    <div class="grid2">
-      <div class="row"><label>Balance</label><input type="range" id="balance" min="-10" max="10"><span class="val" id="balance_v"></span></div>
-      <div class="row"><label>Stereo Width</label><input type="range" id="width" min="0" max="200"><span class="val" id="width_v"></span></div>
-      <div class="row"><label>Cek Mono</label><input type="checkbox" id="mono"><small style="flex:1">gabung L+R jadi mono</small></div>
-      <div class="row"><label>Crossfeed</label><input type="checkbox" id="xfOn"><input type="range" id="xfAmt" min="0" max="50"><span class="val" id="xfAmt_v"></span></div>
-      <div class="row"><label>Delay Kiri</label><input type="range" id="dlyL" min="0" max="20" step="0.05"><span class="val" id="dlyL_v"></span></div>
-      <div class="row"><label>Delay Kanan</label><input type="range" id="dlyR" min="0" max="20" step="0.05"><span class="val" id="dlyR_v"></span></div>
-    </div>
-  </div>
-</section>
-
-<section class="page" id="pg-preset">
-  <div class="card"><h2>PRESET PABRIK</h2>
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button class="btn" data-preset="flat">Flat</button>
-      <button class="btn" data-preset="speaker">Speaker DIY</button>
-      <button class="btn" data-preset="vokal">Vokal</button>
-      <button class="btn" data-preset="bass">Bass</button>
-      <button class="btn" data-preset="malam">Malam</button>
-    </div>
-  </div>
-  <div class="card"><h2>SLOT PENGGUNA</h2><div id="slots"></div>
-  <small>10 slot tersimpan permanen di NVS.</small></div>
-  <div class="card"><h2>BANDING A / B</h2>
-    <button class="ghost" id="abBtn">Sedang: A &mdash; ketuk untuk ke B</button>
-  </div>
-  <div class="card"><h2>EKSPOR / IMPOR</h2>
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button class="ghost" id="expBtn">Ekspor Setting</button>
-      <label class="ghost" style="display:inline-flex;cursor:pointer;align-items:center">Impor Setting<input type="file" id="impFile" accept=".json" style="display:none"></label>
-    </div>
-  </div>
-</section>
-
-<section class="page" id="pg-sys">
-  <div class="card"><h2>PERANGKAT</h2>
-    <table class="info">
-      <tr><td>DAC</td><td>PCM5102 &mdash; SNR 112 dB, THD+N -93 dB</td></tr>
-      <tr><td>Prosesor</td><td>ESP32-S3 &mdash; USB Audio Class 1.0, 48 kHz/16-bit</td></tr>
-      <tr><td>Pin I2S</td><td>BCK GPIO42 &middot; LRCK GPIO21 &middot; DIN GPIO2</td></tr>
-      <tr><td>DSP Chain</td><td>Trim &rarr; HPF &rarr; EQ &rarr; Gate &rarr; Comp &rarr; XFeed &rarr; Width &rarr; Delay &rarr; Loud &rarr; Vol &rarr; Limiter</td></tr>
-      <tr><td>Jaringan</td><td id="netinfo">&mdash;</td></tr>
-      <tr><td>Firmware</td><td id="fwinfo">MbahDAC</td></tr>
-      <tr><td>Ring Buffer DSP</td><td id="ringinfo">&mdash;</td></tr>
-    </table>
-  </div>
-  <div class="card"><h2>WIFI</h2>
-    <div class="row"><label>Nama WiFi</label><input type="text" id="ssid" style="flex:1"></div>
-    <div class="row"><label>Password</label><input type="password" id="wpass" style="flex:1"></div>
-    <button class="ghost" id="wifiBtn">Simpan &amp; Restart</button>
-    <div style="margin-top:8px"><small>WiFi always on. Upload firmware lewat port COM (UART).</small></div>
-  </div>
-</section>
-
+<style>
+html,body{height:100%}
+body{height:100dvh}
+#work{flex:1;min-height:0;display:flex}
+#stage{flex:1;display:flex;flex-direction:column;min-width:0}
+#dispwrap{flex:1;min-height:270px}
+#graph{flex:1;height:100%;min-height:240px}
+.strip input.vfader{height:185px}
+#masterstrip input.vfader{height:185px}
+@media (max-width:900px){.strip input.vfader{height:165px}#masterstrip input.vfader{height:165px}}
+</style></head>
+<body>
+<div id="topbar">
+  <div id="logo"><b>S3 <span>AIR</span></b><small>USB DAC · DSP</small></div>
+  <button class="tabbtn act" data-tab="eq"><svg viewBox="0 0 24 24"><path d="M2 12 Q6 4 9 12 T16 8 T22 10"/></svg>EQ</button>
+  <button class="tabbtn" data-tab="gate"><svg viewBox="0 0 24 24"><path d="M3 20 V10 h6 v10 M9 10 h12"/></svg>Gate</button>
+  <button class="tabbtn" data-tab="comp"><svg viewBox="0 0 24 24"><path d="M3 19 L12 19 L21 6"/></svg>Comp</button>
+  <button class="tabbtn" data-tab="main"><svg viewBox="0 0 24 24"><path d="M4 6 h16 M4 12 h16 M4 18 h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/></svg>Main</button>
+  <button class="tabbtn" data-tab="preset"><svg viewBox="0 0 24 24"><path d="M4 4 h13 l3 3 v13 H4 z"/><path d="M7 4 v5 h9 V4 M7 20 v-6 h10 v6"/></svg>Preset</button>
+  <button class="tabbtn" data-tab="sys"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2 v4 M12 18 v4 M2 12 h4 M18 12 h4"/></svg>Sistem</button>
+  <div id="topright"><span id="netpill">WiFi: ...</span><span id="cliplamp">CLIP <b id="clipct">0</b></span></div>
 </div>
-<aside id="rail">
-  <h2>MASTER</h2>
-  <input type="range" class="vert" id="vol" min="0" max="100">
-  <div id="vol_v" style="font-size:14px;color:var(--am);font-weight:700;margin:4px 0">&ndash;</div>
-  <div class="meters">
-    <div class="mcol"><div class="mbar"><i id="mL"></i></div><span>L</span></div>
-    <div class="mcol"><div class="mbar"><i id="mR"></i></div><span>R</span></div>
-  </div>
-  <button class="ghost rbtn red" id="muteBtn">MUTE</button>
-  <button class="ghost rbtn" id="dimBtn">DIM -20</button>
-  <button class="ghost rbtn" id="bypassBtn">BYPASS</button>
-  <button class="ghost rbtn" id="limBtn">LIMITER</button>
-</aside>
+
+<div id="work">
+  
+
+  <main id="stage">
+    <div id="dispwrap">
+      <canvas id="graph" width="900" height="300"></canvas>
+      <div>
+        <div id="dispmeter"><div class="mcol"><div class="mfill" id="mLf"></div></div><div class="mcol"><div class="mfill" id="mRf"></div></div></div>
+        <div class="mlab">OUT&nbsp;&nbsp;L&nbsp;&nbsp;R</div>
+      </div>
+    </div>
+
+    <div class="card" id="bandbar">
+      <section class="pg act" id="pg-eq">
+        <div class="mrow" style="justify-content:flex-start;gap:6px;margin-bottom:8px">
+          <button class="tgl" id="modePeq">PEQ 10</button><button class="tgl" id="modeGeq">GEQ 31</button>
+          <button class="tgl red" id="bypass">BYPASS</button><button class="tgl" id="loud">LOUDNESS</button><button class="tgl" id="autoHr">AUTO-HEADROOM</button>
+        </div>
+        <div class="chips" id="chips"></div>
+        <div class="boxes">
+          <div class="box"><h5 id="ed_name">BAND 1</h5><div class="row"><button class="tgl" id="ed_on">AKTIF</button><select id="ed_t"><option value="0">Peak</option><option value="1">Low Shelf</option><option value="2">High Shelf</option><option value="3">Notch</option><option value="4">Band Pass</option></select></div></div>
+          <div class="box"><h5>GAIN</h5><div class="row"><input type="range" id="ed_g" min="-15" max="15" step="0.1" style="width:110px"><output id="ed_g_v">0.0</output><small>dB</small></div></div>
+          <div class="box"><h5>FREKUENSI</h5><div class="row"><input type="range" id="ed_fr" min="0" max="1000" step="1" style="width:110px"><input type="number" id="ed_f" min="20" max="20000" step="1"><small>Hz</small></div></div>
+          <div class="box"><h5>Q</h5><div class="row"><input type="range" id="ed_q" min="0.4" max="16" step="0.1" style="width:80px"><output id="ed_q_v">1.0</output></div></div>
+          <div class="box"><h5>DYNAMIC EQ</h5><div class="row"><button class="tgl" id="ed_dyn">DYN</button><small>Thr</small><input type="number" id="ed_dthr" min="-60" max="0" step="1" style="width:52px"><small>Range</small><input type="number" id="ed_drng" min="-12" max="12" step="0.5" style="width:52px"></div></div>
+        </div>
+        <p class="note" style="margin-top:6px">Geser titik warna pada grafik untuk mengatur frekuensi &amp; gain. Putar roda mouse di atas titik untuk Q, klik ganda untuk on/off band.</p>
+      </section>
+
+      <section class="pg" id="pg-gate">
+        <div class="boxes">
+          <div class="box"><h5>NOISE GATE</h5><div class="row"><button class="tgl" id="gateOn">AKTIF</button></div></div>
+          <div class="box"><h5>THRESHOLD</h5><div class="row"><input type="number" id="gateThr" min="-80" max="0" step="1"><small>dB</small></div></div>
+          <div class="box"><h5>ATTACK</h5><div class="row"><input type="number" id="gateAtk" min="0.1" max="100" step="0.1" style="width:56px"><small>ms</small></div></div>
+          <div class="box"><h5>RELEASE</h5><div class="row"><input type="number" id="gateRel" min="10" max="1000" step="10" style="width:56px"><small>ms</small></div></div>
+        </div>
+        <p class="note" style="margin-top:6px">Grafik menampilkan kurva transfer gate terhadap level input. Gate memutus sinyal di bawah threshold (desah antar-lagu hilang).</p>
+      </section>
+
+      <section class="pg" id="pg-comp">
+        <div class="boxes">
+          <div class="box"><h5>COMPRESSOR</h5><div class="row"><button class="tgl" id="compOn">AKTIF</button></div></div>
+          <div class="box"><h5>THRESHOLD</h5><div class="row"><input type="number" id="compThr" min="-60" max="0" step="1"><small>dB</small></div></div>
+          <div class="box"><h5>RATIO</h5><div class="row"><input type="number" id="compRatio" min="1" max="20" step="0.5" style="width:52px"><small>: 1</small></div></div>
+          <div class="box"><h5>ATTACK</h5><div class="row"><input type="number" id="compAtk" min="0.1" max="300" step="1" style="width:56px"><small>ms</small></div></div>
+          <div class="box"><h5>RELEASE</h5><div class="row"><input type="number" id="compRel" min="10" max="1000" step="10" style="width:56px"><small>ms</small></div></div>
+          <div class="box"><h5>MAKEUP</h5><div class="row"><input type="number" id="compMake" min="0" max="24" step="0.5" style="width:52px"><small>dB</small></div></div>
+          <div class="box"><h5>LIMITER</h5><div class="row"><button class="tgl" id="limiter">AKTIF</button><small>Ceiling</small><input type="number" id="ceiling" min="-12" max="0" step="0.5" style="width:52px"><small>dB</small></div></div>
+        </div>
+        <div style="margin-top:7px"><div class="kv"><label>Gain Reduction</label><output id="gr_v">0 dB</output></div><div id="grwrap"><div id="grbar"></div></div></div>
+      </section>
+
+      <section class="pg" id="pg-main">
+        <div class="boxes">
+          <div class="box"><h5>PREAMP</h5><div class="row"><input type="range" id="pre" min="-24" max="24" step="0.5" style="width:110px"><output id="pre_v">0.0 dB</output></div></div>
+          <div class="box"><h5>TRIM L / R</h5><div class="row"><input type="number" id="trimL" min="-12" max="12" step="0.5" value="0"><input type="number" id="trimR" min="-12" max="12" step="0.5" value="0"></div></div>
+          <div class="box"><h5>FASE (BALIK POLARITAS)</h5><div class="row"><button class="tgl" id="polL">INV L</button><button class="tgl" id="polR">INV R</button></div></div>
+          <div class="box"><h5>LOW CUT (HPF)</h5><div class="row"><button class="tgl" id="hpfOn">AKTIF</button><input type="number" id="hpfFreq" min="20" max="200" step="1" value="30" style="width:56px"><small>Hz</small><select id="hpfSlope"><option value="6">6 dB</option><option value="12">12 dB</option><option value="18">18 dB</option><option value="24">24 dB</option></select></div></div>
+          
+          <div class="box"><h5>DELAY L</h5><div class="row"><input type="number" id="dlyL" min="0" max="20" step="0.1" style="width:56px"><small>ms</small></div></div>
+          <div class="box"><h5>DELAY R</h5><div class="row"><input type="number" id="dlyR" min="0" max="20" step="0.1" style="width:56px"><small>ms</small></div></div>
+          <div class="box"><h5>SELISIH JARAK</h5><div class="row"><output id="dlyCm">0 cm</output></div></div>
+          <div class="box"><h5>STEREO WIDTH</h5><div class="row"><input type="range" id="width" min="0" max="2" step="0.05" style="width:100px"><output id="width_v">1.00</output></div></div>
+          <div class="box"><h5>BALANCE</h5><div class="row"><input type="range" id="balance" min="-1" max="1" step="0.05" style="width:100px"><output id="balance_v">0</output></div></div>
+          <div class="box"><h5>CROSSFEED</h5><div class="row"><button class="tgl" id="xfOn">AKTIF</button><input type="range" id="xfAmt" min="0" max="0.5" step="0.05" style="width:70px"><output id="xfAmt_v">0</output></div></div>
+          <div class="box"><h5>LAINNYA</h5><div class="row"><button class="tgl" id="mono">MONO</button><button class="tgl yel" id="dim">DIM</button></div></div>
+          <div class="box"><h5>BATAS VOLUME</h5><div class="row"><input type="range" id="volMax" min="0.1" max="1" step="0.05" style="width:90px"><output id="volMax_v">100%</output></div></div>
+        </div>
+      </section>
+
+      <section class="pg" id="pg-preset">
+        <div class="boxes">
+          <div class="box"><h5>PRESET PABRIK</h5><div class="row" id="factory"></div></div>
+          <div class="box"><h5>BANDING A/B</h5><div class="row"><button class="tgl" id="abBtn">Ke B</button><output id="abInfo">A aktif</output></div></div>
+          <div class="box"><h5>EKSPOR / IMPOR</h5><div class="row"><button class="tgl" id="expBtn">Ekspor</button><button class="tgl" id="impBtn">Impor</button><input type="file" id="impFile" accept=".json" style="display:none"></div></div>
+          <div class="box"><h5>CLIP</h5><div class="row"><button class="tgl" id="clipResetBtn">Reset Hitung</button></div></div>
+        </div>
+        <h4 style="font-size:10px;letter-spacing:1.5px;color:var(--dim);margin:8px 0 5px">PRESET SAYA (10 SLOT)</h4>
+        <div class="chips" id="slots"></div>
+      </section>
+
+      <section class="pg" id="pg-sys">
+        <table class="info">
+          <tr><td>Jaringan</td><td id="netinfo">—</td></tr>
+          <tr><td>Firmware</td><td id="fwinfo">S3 Air</td></tr>
+          <tr><td>Ring Buffer DSP</td><td id="ringinfo">—</td></tr>
+          <tr><td>Puncak EQ</td><td id="eqpeak">—</td></tr>
+        </table>
+        <div class="wform">
+          <input type="text" id="ssid" placeholder="SSID WiFi baru">
+          <input type="password" id="wpass" placeholder="Password WiFi baru">
+          <button class="tgl" id="wifiBtn">Simpan &amp; Restart</button>
+        </div>
+        <p class="note" style="margin-top:6px">Panel ini juga bisa dikendalikan lewat port COM (Serial Monitor 115200): <i>set vol=0.8</i>, <i>set b0_g=3</i>, <i>preset Bass</i>, <i>state</i>.</p>
+      </section>
+    </div>
+  </main>
+
+  
 </div>
+
+<footer id="faderbank">
+  <div id="strips" style="display:flex;gap:4px"></div>
+  <div class="strip" id="masterstrip">
+    <div class="scrib">MAIN</div>
+    <input type="range" class="vfader" id="vol" min="0" max="1" step="0.01" value="0.75">
+    <div class="val" id="volDb">-2.5 dB</div>
+    <div class="mcol" style="width:22px;height:44px"><div class="mfill" id="mMf"></div></div>
+    <button class="tgl red onled" id="mute">MUTE</button>
+  </div>
+</footer>
 
 <script>
-let S=null, AB='A', slotB=null, RT=new Array(31).fill(-60);
 const $=id=>document.getElementById(id);
+let S=null, tab='eq', sel=0, RT=new Array(31).fill(-60), snapA=null, snapB=null, abIsB=false;
+const BCOL=['#37c8d9','#4dabf7','#69db7c','#ffd43b','#ffa94d','#f06595','#b197fc','#ff8787','#63e6be','#e599f7'];
 const GEQF=[20,25,31.5,40,50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000,12500,16000,20000];
-const COL=['#e5484d','#e5484d','#f07f13','#f07f13','#f0a51e','#f0a51e','#3ecf6e','#3ecf6e','#2ea3e0','#b07fe8'];
-const TN=['Peak','Low Shelf','High Shelf','Notch','Band-Pass'];
-function send(o){return fetch('/api/set',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(o)});}
-// ---- koefisien biquad sisi browser (meniru firmware) ----
-function db2lin(db){return Math.pow(10,db*0.05);}
-function cBQ(t,f0,g,q){const w=2*Math.PI*f0/48000,cw=Math.cos(w),sw=Math.sin(w);let A,al,a0,b0,b1,b2,a1,a2;
- if(t==1||t==2){A=db2lin(g*0.5);al=sw*0.5*Math.sqrt((A+1/A)*(1/0.9-1)+2);const sA=Math.sqrt(A),tt=2*sA*al;
-  if(t==1){b0=A*((A+1)-(A-1)*cw+tt);b1=2*A*((A-1)-(A+1)*cw);b2=A*((A+1)-(A-1)*cw-tt);a0=(A+1)+(A-1)*cw+tt;a1=-2*((A-1)+(A+1)*cw);a2=(A+1)+(A-1)*cw-tt;}
-  else{b0=A*((A+1)+(A-1)*cw+tt);b1=-2*A*((A-1)+(A+1)*cw);b2=A*((A+1)+(A-1)*cw-tt);a0=(A+1)-(A-1)*cw+tt;a1=2*((A-1)-(A+1)*cw);a2=(A+1)-(A-1)*cw-tt;}}
- else if(t==3){al=sw/(2*q);b0=1;b1=-2*cw;b2=1;a0=1+al;a1=-2*cw;a2=1-al;}
- else if(t==4){al=sw/(2*q);b0=al;b1=0;b2=-al;a0=1+al;a1=-2*cw;a2=1-al;}
- else{if(Math.abs(g)<0.01)return null;A=db2lin(g*0.5);al=sw/(2*q);b0=1+al*A;b1=-2*cw;b2=1-al*A;a0=1+al/A;a1=-2*cw;a2=1-al/A;}
- return[b0/a0,b1/a0,b2/a0,a1/a0,a2/a0];}
-function cHP2(f0){const w=2*Math.PI*f0/48000,cw=Math.cos(w),sw=Math.sin(w),al=sw/(2*0.7071),a0=1+al;return[(1+cw)*0.5/a0,-(1+cw)/a0,(1+cw)*0.5/a0,-2*cw/a0,(1-al)/a0];}
-function cHP1(f0){const rc=1/(2*Math.PI*f0),a=rc/(rc+1/48000);return[a,-a,0,-a,0];}
-function mag(c,f){if(!c)return 0;const w=2*Math.PI*f/48000,c1=Math.cos(w),c2=Math.cos(2*w);
- const n=c[0]*c[0]+c[1]*c[1]+c[2]*c[2]+2*(c[0]*c[1]+c[1]*c[2])*c1+2*c[0]*c[2]*c2;
- const d=1+c[3]*c[3]+c[4]*c[4]+2*(c[3]+c[3]*c[4])*c1+2*c[4]*c2;return 10*Math.log10(Math.max(n/d,1e-9));}
-function drawCurve(){
- const cv=$('cv'),ctx=cv.getContext('2d'),W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
- const fmin=20,fmax=20000,X=f=>(Math.log10(f/fmin)/Math.log10(fmax/fmin))*W;
- // RTA bars
- ctx.fillStyle='rgba(46,163,224,0.20)';
- GEQF.forEach((f,i)=>{const h=Math.max(0,(RT[i]+60)/60)*(H-14);ctx.fillRect(X(f)-5,H-h,10,h);});
- ctx.strokeStyle='#232830';ctx.fillStyle='#5f7484';ctx.font='10px system-ui';
- [20,50,100,200,500,1000,2000,5000,10000,20000].forEach(f=>{ctx.beginPath();ctx.moveTo(X(f),0);ctx.lineTo(X(f),H);ctx.stroke();ctx.fillText(f>=1000?(f/1000)+'k':f,X(f)+3,H-4);});
- const y0=H/2,sc=(H/2-8)/16;
- [-12,-6,0,6,12].forEach(db=>{const y=y0-db*sc;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.strokeStyle=db==0?'#39424e':'#171c21';ctx.stroke();ctx.fillStyle='#5f7484';ctx.fillText((db>0?'+':'')+db,4,y-3);});
- let fil=[];
- if(!S.bypass){
-  if(S.hpfOn){if(S.hpfSlope<=6)fil.push(cHP1(S.hpfFreq));else if(S.hpfSlope<=12)fil.push(cHP2(S.hpfFreq));else if(S.hpfSlope<=18){fil.push(cHP2(S.hpfFreq));fil.push(cHP1(S.hpfFreq));}else{fil.push(cHP2(S.hpfFreq));fil.push(cHP2(S.hpfFreq));}}
-  if(S.eqMode==0)S.bands.forEach(b=>{if(b.on&&(b.t==0||b.t==1||b.t==2)&&Math.abs(b.g)<0.01)return;if(b.on)fil.push(cBQ(b.t,b.f,b.g,b.q));});
-  else S.geq.forEach((g,i)=>{if(Math.abs(g)>0.01)fil.push(cBQ(0,GEQF[i],g,4.318));});
-  if(S.loud){const d=Math.min(0.85,Math.max(0,0.85-S.vol));fil.push(cBQ(1,120,d*9,0.9));fil.push(cBQ(2,9000,d*6,0.9));}
- }
- let peak=-60;ctx.beginPath();
- for(let px=0;px<=W;px+=3){const f=fmin*Math.pow(fmax/fmin,px/W);let db=0;fil.forEach(c=>db+=mag(c,f));if(db>peak)peak=db;const y=y0-db*sc;px==0?ctx.moveTo(px,y):ctx.lineTo(px,y);}
- ctx.strokeStyle=S.bypass?'#5f7484':'#f0a51e';ctx.lineWidth=2;ctx.stroke();
- $('peakpill').textContent='Puncak EQ: '+(S.bypass?'bypass':(peak<=-59?'+0.0':(peak>0?'+':'')+peak.toFixed(1))+' dB');
+const FS=48000;
+function send(o){return fetch('/api/set',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(o)}).catch(()=>{});}
+function tgl(id,on){$(id).classList.toggle('on',!!on);}
+function fmtF(f){return f>=1000?((f/1000).toFixed(f>=10000?0:1).replace('.0','')+'k'):(''+Math.round(f));}
+function volDb(v){return v<=0.001?'-inf':(20*Math.log10(v)).toFixed(1);}
+/* ---------- hitung respon biquad (cermin firmware) ---------- */
+function coef(type,f0,g,q){
+  if((type==0||type==1||type==2)&&Math.abs(g)<0.01)return null;
+  f0=Math.min(Math.max(f0,10),FS*0.49); q=Math.min(Math.max(q,0.1),20);
+  const w=2*Math.PI*f0/FS,cw=Math.cos(w),sw=Math.sin(w);
+  let b0,b1,b2,a0,a1,a2;
+  if(type==1||type==2){
+    const A=Math.pow(10,g/40),al=sw*0.5*Math.sqrt((A+1/A)*(1/0.9-1)+2),sA=Math.sqrt(A),t=2*sA*al;
+    if(type==1){b0=A*((A+1)-(A-1)*cw+t);b1=2*A*((A-1)-(A+1)*cw);b2=A*((A+1)-(A-1)*cw-t);a0=(A+1)+(A-1)*cw+t;a1=-2*((A-1)+(A+1)*cw);a2=(A+1)+(A-1)*cw-t;}
+    else{b0=A*((A+1)+(A-1)*cw+t);b1=-2*A*((A-1)+(A+1)*cw);b2=A*((A+1)+(A-1)*cw-t);a0=(A+1)-(A-1)*cw+t;a1=2*((A-1)-(A+1)*cw);a2=(A+1)-(A-1)*cw-t;}
+  }else{
+    const A=Math.pow(10,g/40),al=sw/(2*q);
+    if(type==0){b0=1+al*A;b1=-2*cw;b2=1-al*A;a0=1+al/A;a1=-2*cw;a2=1-al/A;}
+    else if(type==3){b0=1;b1=-2*cw;b2=1;a0=1+al;a1=-2*cw;a2=1-al;}
+    else{b0=al;b1=0;b2=-al;a0=1+al;a1=-2*cw;a2=1-al;}
+  }
+  return{b0:b0/a0,b1:b1/a0,b2:b2/a0,a1:a1/a0,a2:a2/a0};
 }
-// ---- strip ----
-function buildStrips(){
- const w=$('strips');w.innerHTML='';
- S.bands.forEach((b,i)=>{
-  const d=document.createElement('div');d.className='strip'+(b.on?'':' off');d.style.setProperty('--ac',COL[i]);
-  d.innerHTML=`<div class="scr" style="background:${COL[i]}">B${i+1} · ${b.f>=1000?(b.f/1000)+'k':b.f} Hz</div>
-  <div><input type="checkbox" id="bon${i}" ${b.on?'checked':''} title="Band aktif"></div>
-  <select id="bt${i}">${TN.map((t,ti)=>`<option value="${ti}" ${b.t==ti?'selected':''}>${t}</option>`).join('')}</select>
-  <input type="range" class="vert" id="bg${i}" min="-15" max="15" step="0.5" value="${b.g}">
-  <div class="gv" id="bg${i}_v">${b.g} dB</div>
-  <input type="number" id="bf${i}" min="20" max="20000" value="${b.f}"><div class="lb">Hz</div>
-  <input type="number" id="bq${i}" min="0.4" max="16" step="0.1" value="${b.q}"><div class="lb">Q</div>
-  <button class="ghost" id="bdyn${i}" style="padding:3px 8px;font-size:10.5px;${b.dyn?'border-color:var(--am);color:var(--am)':''}">DYN</button>
-  <div class="dynbox" id="dynbox${i}">
-    <div class="lb">Dynamic EQ</div>
-    <div><input type="checkbox" id="bdon${i}" ${b.dyn?'checked':''}> <span class="lb">aktif</span></div>
-    <input type="number" id="bdthr${i}" min="-60" max="0" value="${b.dthr}"><div class="lb">Threshold dB</div>
-    <input type="number" id="bdrng${i}" min="-12" max="12" step="0.5" value="${b.drng}"><div class="lb">Rentang dB</div>
-  </div>`;
-  w.appendChild(d);
-  $('bg'+i).oninput=e=>{b.g=+e.target.value;$('bg'+i+'_v').textContent=b.g+' dB';send({['b'+i+'_g']:b.g});drawCurve();};
-  $('bf'+i).onchange=e=>{b.f=+e.target.value;send({['b'+i+'_f']:b.f});buildStrips();drawCurve();};
-  $('bq'+i).onchange=e=>{b.q=+e.target.value;send({['b'+i+'_q']:b.q});drawCurve();};
-  $('bt'+i).onchange=e=>{b.t=+e.target.value;send({['b'+i+'_t']:b.t});drawCurve();};
-  $('bon'+i).onchange=e=>{b.on=e.target.checked;send({['b'+i+'_on']:b.on?1:0});d.classList.toggle('off',!b.on);drawCurve();};
-  $('bdyn'+i).onclick=()=>$('dynbox'+i).classList.toggle('open');
-  $('bdon'+i).onchange=e=>{b.dyn=e.target.checked;send({['b'+i+'_dyn']:b.dyn?1:0});};
-  $('bdthr'+i).onchange=e=>{b.dthr=+e.target.value;send({['b'+i+'_dthr']:b.dthr});};
-  $('bdrng'+i).onchange=e=>{b.drng=+e.target.value;send({['b'+i+'_drng']:b.drng});};
- });
- const gw=$('gstrips');gw.innerHTML='';
- S.geq.forEach((g,i)=>{
-  const d=document.createElement('div');d.className='gstrip';
-  d.innerHTML=`<div class="gf">${GEQF[i]>=1000?(GEQF[i]/1000)+'k':GEQF[i]}</div>
-  <input type="range" class="vert" id="gg${i}" min="-12" max="12" step="0.5" value="${g}">
-  <div class="gv" id="gg${i}_v">${g}</div>`;
-  gw.appendChild(d);
-  $('gg'+i).oninput=e=>{S.geq[i]=+e.target.value;$('gg'+i+'_v').textContent=e.target.value;send({['g'+i]:e.target.value});drawCurve();};
- });
+function respDb(c,f){
+  if(!c)return 0;
+  const w=2*Math.PI*f/FS,c1=Math.cos(w),s1=Math.sin(w),c2=Math.cos(2*w),s2=Math.sin(2*w);
+  const nr=c.b0+c.b1*c1+c.b2*c2, ni=-(c.b1*s1+c.b2*s2);
+  const dr=1+c.a1*c1+c.a2*c2, di=-(c.a1*s1+c.a2*s2);
+  return 10*Math.log10((nr*nr+ni*ni)/Math.max(1e-12,dr*dr+di*di));
 }
-function buildSlots(){
- const w=$('slots');w.innerHTML='';
- S.slots.forEach((full,i)=>{
-  const d=document.createElement('div');d.className='slot'+(full?' full':'');
-  d.innerHTML=`<b>Slot ${i+1}</b><span class="st">${full?'Terisi — setting tersimpan':'Kosong'}</span>
-  <button class="ghost" data-load="${i}" ${full?'':'disabled'}>Muat</button>
-  <button class="ghost" data-save="${i}">Simpan</button>`;
-  w.appendChild(d);
- });
- w.querySelectorAll('[data-load]').forEach(b=>b.onclick=async()=>{await fetch('/api/preset',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({name:'user:'+b.dataset.load})});load();});
- w.querySelectorAll('[data-save]').forEach(b=>b.onclick=async()=>{if(confirm('Simpan setting sekarang ke Slot '+(+b.dataset.save+1)+'?')){await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({slot:b.dataset.save})});load();}});
+function hpfDb(f){
+  if(!S.hpfOn||S.bypass)return 0;
+  const n=S.hpfSlope/6, fc=S.hpfFreq;
+  return -10*Math.log10(1+Math.pow(fc/Math.max(f,1),2*n));
 }
+function loudDb(f){
+  if(!S.loud||S.bypass)return 0;
+  const d=Math.min(Math.max(0.85-S.vol,0),0.85);
+  return respDb(coef(1,100,d*9,0.9),f)+respDb(coef(2,10000,d*6,0.9),f);
+}
+function totalDb(f){
+  if(S.bypass)return 0;
+  let d=hpfDb(f)+loudDb(f);
+  if(S.eqMode==0){for(let i=0;i<10;i++){const b=S.bands[i];if(b.on)d+=respDb(coef(b.t,b.f,b.g,b.q),f);}}
+  else{for(let i=0;i<31;i++){if(S.geq[i])d+=respDb(coef(0,GEQF[i],S.geq[i],4.318),f);}}
+  return d;
+}
+/* ---------- grafik ---------- */
+const cv=$('graph'),ctx=cv.getContext('2d');
+function fitCv(){const r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;cv.width=Math.max(300,r.width)*d;cv.height=Math.max(240,r.height)*d;}
+function xFor(f,W){return (Math.log(f/20)/Math.log(1000))*W;}
+function fForX(x,W){return 20*Math.pow(1000,x/W);}
+function yFor(db,H){return (1-(db+15)/30)*H;}
+function dbForY(y,H){return (1-y/H)*30-15;}
+function draw(){
+  if(!S)return;
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#050505';ctx.fillRect(0,0,W,H);
+  if(tab=='gate'||tab=='comp')return drawDyn(W,H);
+  // RTA
+  const bw=W/31;
+  ctx.fillStyle='#2b5ea7';
+  for(let i=0;i<31;i++){const v=Math.min(Math.max((RT[i]+60)/60,0),1);ctx.fillRect(i*bw+1,H-v*H,bw-2,v*H);}
+  // grid
+  ctx.strokeStyle='#26262a';ctx.fillStyle='#666';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
+  [20,50,100,200,500,1000,2000,5000,10000,20000].forEach(f=>{const x=xFor(f,W);ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();ctx.fillText(fmtF(f),x+2,H-4);});
+  [12,6,0,-6,-12].forEach(db=>{const y=yFor(db,H);ctx.strokeStyle=db==0?'#3d3d42':'#26262a';ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.fillStyle='#666';ctx.fillText((db>0?'+':'')+db,3,y-3);});
+  // kurva total
+  const N=140;ctx.beginPath();
+  for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,totalDb(f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}
+  ctx.strokeStyle='#e8930c';ctx.lineWidth=2.2;ctx.stroke();
+  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle='rgba(232,147,12,0.30)';ctx.fill();
+  // kurva band terpilih
+  if(S.eqMode==0){const b=S.bands[sel];if(b.on){ctx.beginPath();for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,respDb(coef(b.t,b.f,b.g,b.q),f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.strokeStyle=BCOL[sel];ctx.lineWidth=1.2;ctx.stroke();}}
+  // titik node
+  if(S.eqMode==0){
+    for(let i=0;i<10;i++){const b=S.bands[i],x=xFor(b.f,W),y=yFor(b.g,H);
+      ctx.beginPath();ctx.arc(x,y,i==sel?16:13,0,7);ctx.fillStyle=b.on?BCOL[i]:'#555';ctx.fill();
+      ctx.lineWidth=i==sel?3:1.5;ctx.strokeStyle=i==sel?'#fff':'#111';ctx.stroke();
+      ctx.fillStyle='#0a0a0a';ctx.font='bold 11px Arial';ctx.textAlign='center';ctx.fillText(i+1,x,y+4);ctx.textAlign='left';}
+  }else{
+    for(let i=0;i<31;i++){const x=xFor(GEQF[i],W),y=yFor(S.geq[i],H);
+      ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fillStyle='#e8930c';ctx.fill();ctx.strokeStyle='#111';ctx.stroke();}
+  }
+}
+function drawDyn(W,H){
+  const x0=40,x1=W-8,y0=8,y1=H-22;
+  const X=v=>x0+(v+60)/60*(x1-x0), Y=v=>y0+(1-(v+60)/60)*(y1-y0);
+  ctx.strokeStyle='#26262a';ctx.fillStyle='#666';ctx.font='10px Arial';
+  for(let v=-50;v<0;v+=10){ctx.beginPath();ctx.moveTo(X(v),y0);ctx.lineTo(X(v),y1);ctx.stroke();ctx.beginPath();ctx.moveTo(x0,Y(v));ctx.lineTo(x1,Y(v));ctx.stroke();ctx.fillText(v,X(v)-4,y1+12);ctx.fillText(v,6,Y(v)+3);}
+  ctx.strokeStyle='#3d3d42';ctx.beginPath();ctx.moveTo(X(-60),Y(-60));ctx.lineTo(X(0),Y(0));ctx.stroke();
+  ctx.beginPath();
+  for(let i=0;i<=120;i++){const inn=-60+60*i/120;let out;
+    if(tab=='gate'){out=!S.gateOn?inn:(inn>S.gateThr?inn:-60);}
+    else{out=inn;if(S.compOn&&inn>S.compThr)out=S.compThr+(inn-S.compThr)/Math.max(S.compRatio,1);out+=S.compOn?S.compMake:0;if(S.limiter)out=Math.min(out,S.ceiling);}
+    out=Math.max(-60,Math.min(3,out));const px=X(inn),py=Y(out);i?ctx.lineTo(px,py):ctx.moveTo(px,py);}
+  ctx.strokeStyle='#e8930c';ctx.lineWidth=2.2;ctx.stroke();
+  if(tab=='comp'&&S.limiter){ctx.strokeStyle='#e03131';ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(x0,Y(S.ceiling));ctx.lineTo(x1,Y(S.ceiling));ctx.stroke();ctx.setLineDash([]);}
+}
+
+/* ---------- interaksi grafik ---------- */
+let drag=null,lastSend=0,pendSend=null;
+function cvPos(e){const r=cv.getBoundingClientRect();return{x:(e.clientX-r.left)*(cv.width/r.width),y:(e.clientY-r.top)*(cv.height/r.height)};}
+function nodeAt(p){
+  if(!S||tab!='eq')return -1;
+  if(S.eqMode==0){for(let i=0;i<10;i++){const b=S.bands[i],x=xFor(b.f,cv.width),y=yFor(b.g,cv.height);if(Math.hypot(p.x-x,p.y-y)<26)return i;}}
+  else{for(let i=0;i<31;i++){const x=xFor(GEQF[i],cv.width),y=yFor(S.geq[i],cv.height);if(Math.hypot(p.x-x,p.y-y)<20)return 100+i;}}
+  return -1;
+}
+function sendSoon(o){
+  const now=performance.now();
+  if(now-lastSend>50){lastSend=now;send(o);}
+  else{pendSend=o;clearTimeout(sendSoon.t);sendSoon.t=setTimeout(()=>{if(pendSend){send(pendSend);pendSend=null;lastSend=performance.now();}},60);}
+}
+cv.addEventListener('pointerdown',e=>{
+  const id=nodeAt(cvPos(e));if(id<0)return;
+  drag=id;cv.setPointerCapture(e.pointerId);
+  if(id<100){sel=id;fillChips();fillEditor();draw();}
+});
+cv.addEventListener('pointermove',e=>{
+  if(drag===null||drag===undefined||!S)return;
+  const p=cvPos(e);
+  if(drag<100){const b=S.bands[drag];
+    b.f=Math.round(Math.min(20000,Math.max(20,fForX(p.x,cv.width))));
+    b.g=Math.round(Math.min(15,Math.max(-15,dbForY(p.y,cv.height)))*10)/10;
+    sendSoon({['b'+drag+'_f']:b.f,['b'+drag+'_g']:b.g});
+    fillEditor();fillStrips();draw();
+  }else{const i=drag-100;
+    S.geq[i]=Math.round(Math.min(12,Math.max(-12,dbForY(p.y,cv.height)*0.8))*10)/10;
+    sendSoon({['g'+i]:S.geq[i]});fillStrips();draw();
+  }
+});
+cv.addEventListener('pointerup',()=>{drag=null;});
+cv.addEventListener('dblclick',e=>{
+  const id=nodeAt(cvPos(e));
+  if(id>=0&&id<100){const b=S.bands[id];b.on=!b.on;send({['b'+id+'_on']:b.on?1:0});fillEditor();fillChips();fillStrips();draw();}
+});
+cv.addEventListener('wheel',e=>{
+  const id=nodeAt(cvPos(e));
+  if(id>=0&&id<100){e.preventDefault();const b=S.bands[id];b.q=Math.round(Math.min(16,Math.max(0.4,b.q*(e.deltaY<0?1.15:0.87)))*10)/10;send({['b'+id+'_q']:b.q});if(id==sel)fillEditor();draw();}
+},{passive:false});
+/* ---------- builders ---------- */
+function fillChips(){
+  const w=$('chips');w.innerHTML='';
+  S.bands.forEach((b,i)=>{
+    const c=document.createElement('button');c.className='chip'+(i==sel?' sel':'')+(b.on?'':' off');
+    c.style.borderTopColor=BCOL[i];c.textContent='B'+(i+1)+' · '+fmtF(b.f);
+    c.onclick=()=>{sel=i;fillChips();fillEditor();draw();};
+    w.appendChild(c);
+  });
+}
+function fillStrips(){
+  const w=$('strips');w.innerHTML='';
+  if(S.eqMode==0){
+    S.bands.forEach((b,i)=>{
+      const d=document.createElement('div');d.className='strip'+(i==sel?' sel':'')+(b.on?'':' off');
+      d.innerHTML=`<div class="scrib" style="background:${BCOL[i]}">B${i+1}</div><div class="val">${b.g.toFixed(1)}</div>`;
+      const f=document.createElement('input');f.type='range';f.className='vfader';f.min=-15;f.max=15;f.step=0.1;f.value=b.g;
+      f.oninput=()=>{b.g=+f.value;d.querySelector('.val').textContent=b.g.toFixed(1);sendSoon({['b'+i+'_g']:b.g});if(i==sel)fillEditor();draw();};
+      f.onclick=()=>{sel=i;fillChips();fillEditor();};
+      const on=document.createElement('button');on.className='tgl onled'+(b.on?' on':'');on.textContent='ON';
+      on.onclick=()=>{b.on=!b.on;send({['b'+i+'_on']:b.on?1:0});fillStrips();fillChips();fillEditor();draw();};
+      d.appendChild(f);d.appendChild(on);w.appendChild(d);
+    });
+  }else{
+    GEQF.forEach((fr,i)=>{
+      const d=document.createElement('div');d.className='strip gq';
+      d.innerHTML=`<div class="scrib" style="background:#8a6d00">${fmtF(fr)}</div><div class="val">${S.geq[i].toFixed(1)}</div>`;
+      const f=document.createElement('input');f.type='range';f.className='vfader';f.min=-12;f.max=12;f.step=0.5;f.value=S.geq[i];
+      f.oninput=()=>{S.geq[i]=+f.value;d.querySelector('.val').textContent=S.geq[i].toFixed(1);sendSoon({['g'+i]:S.geq[i]});draw();};
+      d.appendChild(f);w.appendChild(d);
+    });
+  }
+}
+function fillEditor(){
+  const b=S.bands[sel];if(!b)return;
+  $('ed_name').textContent='BAND '+(sel+1)+' — '+fmtF(b.f)+' Hz';
+  tgl('ed_on',b.on);$('ed_t').value=b.t;
+  $('ed_g').value=b.g;$('ed_g_v').textContent=b.g.toFixed(1);
+  $('ed_f').value=Math.round(b.f);
+  $('ed_fr').value=Math.round(Math.log(b.f/20)/Math.log(1000)*1000);
+  $('ed_q').value=b.q;$('ed_q_v').textContent=b.q.toFixed(1);
+  tgl('ed_dyn',b.dyn);$('ed_dthr').value=b.dthr;$('ed_drng').value=b.drng;
+}
+function fillSlots(){
+  const w=$('slots');w.innerHTML='';
+  for(let i=0;i<10;i++){
+    const d=document.createElement('div');d.className='chip'+(S.slots[i]?'':' off');d.style.flex='0 0 104px';d.style.padding='4px';
+    d.innerHTML=`<div style="font-size:11px;margin-bottom:3px">Slot ${i+1}${S.slots[i]?'':' (kosong)'}</div>`;
+    const l=document.createElement('button');l.className='tgl';l.textContent='Muat';l.style.marginRight='3px';
+    l.onclick=async()=>{await fetch('/api/preset',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({name:'user:'+i})});load();};
+    const sv=document.createElement('button');sv.className='tgl';sv.textContent='Simpan';
+    sv.onclick=async()=>{if(confirm('Simpan setting sekarang ke Slot '+(i+1)+'?')){await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({slot:i})});load();}};
+    d.appendChild(l);d.appendChild(sv);w.appendChild(d);
+  }
+}
+/* ---------- settings <-> objek datar ---------- */
+function capture(){
+  const o={preamp:S.preamp,trimL:S.trimL,trimR:S.trimR,polL:S.polL,polR:S.polR,hpfOn:S.hpfOn,hpfFreq:S.hpfFreq,hpfSlope:S.hpfSlope,eqMode:S.eqMode,bypass:S.bypass,loud:S.loud,gateOn:S.gateOn,gateThr:S.gateThr,gateAtk:S.gateAtk,gateRel:S.gateRel,compOn:S.compOn,compThr:S.compThr,compRatio:S.compRatio,compAtk:S.compAtk,compRel:S.compRel,compMake:S.compMake,limiter:S.limiter,ceiling:S.ceiling,xfOn:S.xfOn,xfAmt:S.xfAmt,width:S.width,mono:S.mono,balance:S.balance,dlyL:S.dlyL,dlyR:S.dlyR,vol:S.vol,mute:S.mute,dim:S.dim,volMax:S.volMax,autoHr:S.autoHr};
+  S.bands.forEach((b,i)=>{o['b'+i+'_on']=b.on?1:0;o['b'+i+'_t']=b.t;o['b'+i+'_f']=b.f;o['b'+i+'_g']=b.g;o['b'+i+'_q']=b.q;o['b'+i+'_dyn']=b.dyn?1:0;o['b'+i+'_dthr']=b.dthr;o['b'+i+'_drng']=b.drng;});
+  S.geq.forEach((g,i)=>{o['g'+i]=g;});
+  return o;
+}
+/* ---------- fill semua kontrol ---------- */
 function fill(){
- $('vol').value=S.vol*100;$('vol_v').textContent=Math.round(S.vol*100)+'%';
- $('vol2').value=S.vol*100;$('vol2_v').textContent=Math.round(S.vol*100)+'%';
- $('volMax').value=S.volMax*100;$('volMax_v').textContent=Math.round(S.volMax*100)+'%';
- $('preamp').value=S.preamp;$('preamp_v').textContent=S.preamp+' dB';
- $('trimL').value=S.trimL;$('trimL_v').textContent=S.trimL+' dB';
- $('trimR').value=S.trimR;$('trimR_v').textContent=S.trimR+' dB';
- $('polL').checked=S.polL;$('polR').checked=S.polR;
- $('muteBtn').classList.toggle('on',S.mute);$('muteBtn').textContent=S.mute?'MUTED':'MUTE';
- $('dimBtn').classList.toggle('on',S.dim);
- $('bypassBtn').classList.toggle('on',S.bypass);
- $('limiter').checked=S.limiter;$('limBtn').classList.toggle('on',S.limiter);
- $('ceiling').value=S.ceiling;$('ceiling_v').textContent=S.ceiling+' dB';
- $('hpfOn').checked=S.hpfOn;$('hpfFreq').value=S.hpfFreq;$('hpfFreq_v').textContent=S.hpfFreq+' Hz';$('hpfSlope').value=S.hpfSlope;
- $('gateOn').checked=S.gateOn;$('gateThr').value=S.gateThr;$('gateThr_v').textContent=S.gateThr+' dB';
- $('gateAtk').value=S.gateAtk;$('gateAtk_v').textContent=S.gateAtk+' ms';$('gateRel').value=S.gateRel;$('gateRel_v').textContent=S.gateRel+' ms';
- $('compOn').checked=S.compOn;$('compThr').value=S.compThr;$('compThr_v').textContent=S.compThr+' dB';
- $('compRatio').value=S.compRatio;$('compRatio_v').textContent=S.compRatio+' : 1';
- $('compMake').value=S.compMake;$('compMake_v').textContent=S.compMake+' dB';
- $('compAtk').value=S.compAtk;$('compAtk_v').textContent=S.compAtk+' ms';$('compRel').value=S.compRel;$('compRel_v').textContent=S.compRel+' ms';
- $('xfOn').checked=S.xfOn;$('xfAmt').value=S.xfAmt*100;$('xfAmt_v').textContent=Math.round(S.xfAmt*100)+'%';
- $('width').value=S.width*100;$('width_v').textContent=Math.round(S.width*100)+'%';$('mono').checked=S.mono;
- $('balance').value=S.balance*10;$('balance_v').textContent=S.balance==0?'Tengah':S.balance;
- $('dlyL').value=S.dlyL;$('dlyL_v').textContent=S.dlyL+' ms · '+(S.dlyL*34.3).toFixed(0)+' cm';
- $('dlyR').value=S.dlyR;$('dlyR_v').textContent=S.dlyR+' ms · '+(S.dlyR*34.3).toFixed(0)+' cm';
- $('loud').checked=S.loud;$('autoHr').checked=S.autoHr;
- $('modePeq').classList.toggle('on',S.eqMode==0);$('modeGeq').classList.toggle('on',S.eqMode==1);
- $('strips').style.display=S.eqMode==0?'flex':'none';$('gstrips').style.display=S.eqMode==1?'flex':'none';
- $('eqtitle').textContent=S.eqMode==0?'PARAMETRIC EQ — 10 BAND':'GRAPHIC EQ — 31 BAND 1/3 OKTAF';
- $('netpill').innerHTML=S.net;$('netinfo').textContent=S.net+' · http://mbahdac.local';$('fwinfo').textContent='MbahDAC '+S.fw;$('ringinfo').textContent='underrun '+S.ur+' - overflow '+S.ov;
- buildStrips();buildSlots();drawCurve();
+  $('netpill').textContent=S.net;$('netinfo').textContent=S.net+' · http://mbahdac.local';
+  $('fwinfo').textContent='S3 Air '+S.fw;
+  $('ringinfo').textContent='underrun '+S.ur+' · overflow '+S.ov;
+  $('eqpeak').textContent=(S.eqPeak>=0?'+':'')+S.eqPeak+' dB';
+  $('pre').value=S.preamp;$('pre_v').textContent=S.preamp.toFixed(1)+' dB';
+  $('trimL').value=S.trimL;$('trimR').value=S.trimR; tgl('polL',S.polL);tgl('polR',S.polR);
+  tgl('hpfOn',S.hpfOn);$('hpfFreq').value=S.hpfFreq;$('hpfSlope').value=S.hpfSlope;
+  tgl('modePeq',S.eqMode==0);tgl('modeGeq',S.eqMode==1);tgl('bypass',S.bypass);
+  tgl('loud',S.loud);tgl('autoHr',S.autoHr);
+  tgl('gateOn',S.gateOn);$('gateThr').value=S.gateThr;$('gateAtk').value=S.gateAtk;$('gateRel').value=S.gateRel;
+  tgl('compOn',S.compOn);$('compThr').value=S.compThr;$('compRatio').value=S.compRatio;$('compAtk').value=S.compAtk;$('compRel').value=S.compRel;$('compMake').value=S.compMake;
+  tgl('limiter',S.limiter);$('ceiling').value=S.ceiling;
+  $('dlyL').value=S.dlyL;$('dlyR').value=S.dlyR;
+  $('dlyCm').textContent=((S.dlyR-S.dlyL)*34.3).toFixed(0)+' cm';
+  $('width').value=S.width;$('width_v').textContent=S.width.toFixed(2);
+  $('balance').value=S.balance;$('balance_v').textContent=S.balance.toFixed(2);
+  tgl('xfOn',S.xfOn);$('xfAmt').value=S.xfAmt;$('xfAmt_v').textContent=S.xfAmt.toFixed(2);
+  tgl('mono',S.mono);tgl('dim',S.dim);
+  $('volMax').value=S.volMax;$('volMax_v').textContent=Math.round(S.volMax*100)+'%';
+  $('vol').value=S.vol;$('volDb').textContent=volDb(S.vol)+' dB';
+  tgl('mute',S.mute);
+  fillChips();fillEditor();fillStrips();fillSlots();draw();
 }
-async function load(){S=await (await fetch('/api/state')).json();fill();}
-function bulk(s){const o={preamp:s.preamp,trimL:s.trimL,trimR:s.trimR,polL:s.polL?1:0,polR:s.polR?1:0,hpfOn:s.hpfOn?1:0,hpfFreq:s.hpfFreq,hpfSlope:s.hpfSlope,eqMode:s.eqMode,bypass:s.bypass?1:0,loud:s.loud?1:0,gateOn:s.gateOn?1:0,gateThr:s.gateThr,gateAtk:s.gateAtk,gateRel:s.gateRel,compOn:s.compOn?1:0,compThr:s.compThr,compRatio:s.compRatio,compAtk:s.compAtk,compRel:s.compRel,compMake:s.compMake,limiter:s.limiter?1:0,ceiling:s.ceiling,xfOn:s.xfOn?1:0,xfAmt:s.xfAmt,width:s.width,mono:s.mono?1:0,balance:s.balance,dlyL:s.dlyL,dlyR:s.dlyR,vol:s.vol,mute:s.mute?1:0,dim:s.dim?1:0,volMax:s.volMax,autoHr:s.autoHr?1:0};
- s.bands.forEach((b,i)=>{o['b'+i+'_on']=b.on?1:0;o['b'+i+'_t']=b.t;o['b'+i+'_f']=b.f;o['b'+i+'_g']=b.g;o['b'+i+'_q']=b.q;o['b'+i+'_dyn']=b.dyn?1:0;o['b'+i+'_dthr']=b.dthr;o['b'+i+'_drng']=b.drng;});
- s.geq.forEach((g,i)=>{o['g'+i]=g;});return send(o);}
-// ikatan kontrol sederhana
-function bindRange(id,key,fmt,scale){$(id).oninput=e=>{const v=+e.target.value*(scale||1);S[key]=v;$(id+'_v').textContent=fmt(v);send({[key]:v});};}
-function bindChk(id,key,after){$(id).onchange=e=>{S[key]=e.target.checked;send({[key]:S[key]?1:0});if(after)after();};}
-bindRange('preamp','preamp',v=>v+' dB');bindRange('trimL','trimL',v=>v+' dB');bindRange('trimR','trimR',v=>v+' dB');
-bindRange('hpfFreq','hpfFreq',v=>v+' Hz');bindRange('ceiling','ceiling',v=>v+' dB');
-bindRange('gateThr','gateThr',v=>v+' dB');bindRange('gateAtk','gateAtk',v=>v+' ms');bindRange('gateRel','gateRel',v=>v+' ms');
-bindRange('compThr','compThr',v=>v+' dB');bindRange('compRatio','compRatio',v=>v+' : 1');bindRange('compMake','compMake',v=>v+' dB');
-bindRange('compAtk','compAtk',v=>v+' ms');bindRange('compRel','compRel',v=>v+' ms');
-bindChk('polL','polL');bindChk('polR','polR');bindChk('hpfOn','hpfOn',drawCurve);bindChk('gateOn','gateOn');bindChk('compOn','compOn');
-bindChk('xfOn','xfOn');bindChk('mono','mono');bindChk('loud','loud',drawCurve);bindChk('autoHr','autoHr');
-$('hpfSlope').onchange=e=>{S.hpfSlope=+e.target.value;send({hpfSlope:S.hpfSlope});drawCurve();};
-$('xfAmt').oninput=e=>{S.xfAmt=e.target.value/100;$('xfAmt_v').textContent=e.target.value+'%';send({xfAmt:S.xfAmt});};
-$('width').oninput=e=>{S.width=e.target.value/100;$('width_v').textContent=e.target.value+'%';send({width:S.width});};
-$('balance').oninput=e=>{S.balance=e.target.value/10;$('balance_v').textContent=S.balance==0?'Tengah':S.balance;send({balance:S.balance});};
-$('dlyL').oninput=e=>{S.dlyL=+e.target.value;$('dlyL_v').textContent=S.dlyL+' ms · '+(S.dlyL*34.3).toFixed(0)+' cm';send({dlyL:S.dlyL});};
-$('dlyR').oninput=e=>{S.dlyR=+e.target.value;$('dlyR_v').textContent=S.dlyR+' ms · '+(S.dlyR*34.3).toFixed(0)+' cm';send({dlyR:S.dlyR});};
-function setVol(v){S.vol=v/100;$('vol').value=v;$('vol2').value=v;$('vol_v').textContent=v+'%';$('vol2_v').textContent=v+'%';send({vol:S.vol});drawCurve();}
-$('vol').oninput=e=>setVol(+e.target.value);$('vol2').oninput=e=>setVol(+e.target.value);
-$('volMax').oninput=e=>{S.volMax=e.target.value/100;$('volMax_v').textContent=e.target.value+'%';send({volMax:S.volMax});};
-$('limiter').onchange=e=>{S.limiter=e.target.checked;send({limiter:S.limiter?1:0});$('limBtn').classList.toggle('on',S.limiter);};
-$('limBtn').onclick=()=>{S.limiter=!S.limiter;send({limiter:S.limiter?1:0});fill();};
-$('muteBtn').onclick=()=>{S.mute=!S.mute;send({mute:S.mute?1:0});fill();};
-$('dimBtn').onclick=()=>{S.dim=!S.dim;send({dim:S.dim?1:0});fill();};
-$('bypassBtn').onclick=()=>{S.bypass=!S.bypass;send({bypass:S.bypass?1:0});fill();};
-$('modePeq').onclick=()=>{S.eqMode=0;send({eqMode:0});fill();};
-$('modeGeq').onclick=()=>{S.eqMode=1;send({eqMode:1});fill();};
-$('flatBtn').onclick=async()=>{const o={};if(S.eqMode==0)S.bands.forEach((b,i)=>o['b'+i+'_g']=0);else S.geq.forEach((g,i)=>o['g'+i]=0);await send(o);load();};
-$('clipReset').onclick=()=>{send({clipReset:1});$('clipct').textContent='0';};
-// tab
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
- document.querySelectorAll('nav button').forEach(x=>x.classList.remove('act'));b.classList.add('act');
- document.querySelectorAll('.page').forEach(p=>p.classList.remove('act'));$('pg-'+b.dataset.tab).classList.add('act');
- if(b.dataset.tab=='eq')drawCurve();});
-// preset pabrik
-document.querySelectorAll('[data-preset]').forEach(b=>b.onclick=async()=>{
- await fetch('/api/preset',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({name:b.dataset.preset})});load();});
-$('abBtn').onclick=async()=>{
- if(AB=='A'){slotB=JSON.parse(JSON.stringify(S));AB='B';}
- else{const cur=JSON.parse(JSON.stringify(S));await bulk(slotB);slotB=cur;AB='A';load();}
- $('abBtn').textContent='Sedang: '+AB+' — ketuk untuk ke '+(AB=='A'?'B':'A');};
-$('expBtn').onclick=()=>{const blob=new Blob([JSON.stringify(S,null,1)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='mbahdac-preset.json';a.click();};
-$('impFile').onchange=async e=>{try{const s=JSON.parse(await e.target.files[0].text());await bulk(s);load();}catch(err){alert('File tidak valid');}};
-$('wifiBtn').onclick=()=>{if(confirm('Alat restart dan gabung WiFi rumah dengan data baru. Lanjut?'))fetch('/api/wifi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({ssid:$('ssid').value,pass:$('wpass').value})});};
+/* ---------- binding ---------- */
+function bindTgl(id,key,after){$(id).onclick=()=>{S[key]=S[key]?0:1;tgl(id,S[key]);send({[key]:S[key]});if(after)after();draw();};}
+function bindNum(id,key,after){$(id).onchange=()=>{S[key]=+$(id).value;send({[key]:S[key]});if(after)after();draw();};}
+function bind(){
+  document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>{
+    tab=b.dataset.tab;
+    document.querySelectorAll('.tabbtn').forEach(x=>x.classList.toggle('act',x==b));
+    document.querySelectorAll('.pg').forEach(p=>p.classList.toggle('act',p.id=='pg-'+tab||(tab=='sys'&&p.id=='pg-sys')));
+    draw();
+  });
+  $('pre').oninput=()=>{S.preamp=+$('pre').value;$('pre_v').textContent=S.preamp.toFixed(1)+' dB';sendSoon({preamp:S.preamp});};
+  bindNum('trimL','trimL');bindNum('trimR','trimR');
+  bindTgl('polL','polL');bindTgl('polR','polR');
+  bindTgl('hpfOn','hpfOn');bindNum('hpfFreq','hpfFreq');bindNum('hpfSlope','hpfSlope');
+  $('modePeq').onclick=()=>{S.eqMode=0;send({eqMode:0});fill();};
+  $('modeGeq').onclick=()=>{S.eqMode=1;send({eqMode:1});fill();};
+  bindTgl('bypass','bypass');
+  bindTgl('loud','loud');bindTgl('autoHr','autoHr');
+  bindTgl('gateOn','gateOn');bindNum('gateThr','gateThr');bindNum('gateAtk','gateAtk');bindNum('gateRel','gateRel');
+  bindTgl('compOn','compOn');bindNum('compThr','compThr');bindNum('compRatio','compRatio');bindNum('compAtk','compAtk');bindNum('compRel','compRel');bindNum('compMake','compMake');
+  bindTgl('limiter','limiter');bindNum('ceiling','ceiling');
+  bindNum('dlyL','dlyL',()=>$('dlyCm').textContent=((S.dlyR-S.dlyL)*34.3).toFixed(0)+' cm');
+  bindNum('dlyR','dlyR',()=>$('dlyCm').textContent=((S.dlyR-S.dlyL)*34.3).toFixed(0)+' cm');
+  $('width').oninput=()=>{S.width=+$('width').value;$('width_v').textContent=S.width.toFixed(2);sendSoon({width:S.width});};
+  $('balance').oninput=()=>{S.balance=+$('balance').value;$('balance_v').textContent=S.balance.toFixed(2);sendSoon({balance:S.balance});};
+  bindTgl('xfOn','xfOn');
+  $('xfAmt').oninput=()=>{S.xfAmt=+$('xfAmt').value;$('xfAmt_v').textContent=S.xfAmt.toFixed(2);sendSoon({xfAmt:S.xfAmt});};
+  bindTgl('mono','mono');bindTgl('dim','dim');
+  $('volMax').oninput=()=>{S.volMax=+$('volMax').value;$('volMax_v').textContent=Math.round(S.volMax*100)+'%';sendSoon({volMax:S.volMax});};
+  $('vol').oninput=()=>{S.vol=+$('vol').value;$('volDb').textContent=volDb(S.vol)+' dB';sendSoon({vol:S.vol});draw();};
+  bindTgl('mute','mute');
+  // editor band
+  $('ed_on').onclick=()=>{const b=S.bands[sel];b.on=!b.on;tgl('ed_on',b.on);send({['b'+sel+'_on']:b.on?1:0});fillChips();fillStrips();draw();};
+  $('ed_t').onchange=()=>{const b=S.bands[sel];b.t=+$('ed_t').value;send({['b'+sel+'_t']:b.t});draw();};
+  $('ed_g').oninput=()=>{const b=S.bands[sel];b.g=+$('ed_g').value;$('ed_g_v').textContent=b.g.toFixed(1);sendSoon({['b'+sel+'_g']:b.g});fillStrips();draw();};
+  $('ed_f').onchange=()=>{const b=S.bands[sel];b.f=Math.min(20000,Math.max(20,+$('ed_f').value));send({['b'+sel+'_f']:b.f});fillEditor();fillChips();draw();};
+  $('ed_fr').oninput=()=>{const b=S.bands[sel];b.f=Math.round(20*Math.pow(1000,+$('ed_fr').value/1000));$('ed_f').value=b.f;sendSoon({['b'+sel+'_f']:b.f});fillChips();draw();};
+  $('ed_q').oninput=()=>{const b=S.bands[sel];b.q=+$('ed_q').value;$('ed_q_v').textContent=b.q.toFixed(1);sendSoon({['b'+sel+'_q']:b.q});draw();};
+  $('ed_dyn').onclick=()=>{const b=S.bands[sel];b.dyn=b.dyn?0:1;tgl('ed_dyn',b.dyn);send({['b'+sel+'_dyn']:b.dyn});};
+  $('ed_dthr').onchange=()=>{const b=S.bands[sel];b.dthr=+$('ed_dthr').value;send({['b'+sel+'_dthr']:b.dthr});};
+  $('ed_drng').onchange=()=>{const b=S.bands[sel];b.drng=+$('ed_drng').value;send({['b'+sel+'_drng']:b.drng});};
+  // preset
+  const fw=$('factory');
+  [['flat','Flat'],['speaker','Speaker DIY'],['vokal','Vokal'],['bass','Bass'],['malam','Malam']].forEach(([n,l])=>{
+    const b=document.createElement('button');b.className='tgl';b.textContent=l;
+    b.onclick=async()=>{await fetch('/api/preset',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({name:n})});load();};
+    fw.appendChild(b);
+  });
+  $('abBtn').onclick=async()=>{
+    if(!abIsB){snapA=capture();if(!snapB)snapB=JSON.parse(JSON.stringify(snapA));await send(snapB);abIsB=true;$('abBtn').textContent='Ke A';$('abInfo').textContent='B aktif';}
+    else{snapB=capture();await send(snapA);abIsB=false;$('abBtn').textContent='Ke B';$('abInfo').textContent='A aktif';}
+    setTimeout(load,200);
+  };
+  const doExport=()=>{
+    const blob=new Blob([JSON.stringify(capture(),null,1)],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='mbahdac-setting.json';a.click();URL.revokeObjectURL(a.href);
+  };
+  $('expBtn').onclick=doExport;
+  $('impBtn').onclick=()=>$('impFile').click();
+  $('impFile').onchange=()=>{const f=$('impFile').files[0];if(!f)return;const r=new FileReader();r.onload=async()=>{try{await send(JSON.parse(r.result));load();}catch(e){alert('File tidak valid');}};r.readAsText(f);};
+  const doClip=()=>send({clipReset:1});
+  $('clipResetBtn').onclick=doClip;
+  $('wifiBtn').onclick=()=>{if(confirm('Alat restart dan gabung WiFi rumah dengan data baru. Lanjut?'))fetch('/api/wifi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({ssid:$('ssid').value,pass:$('wpass').value})});};
+}
+/* ---------- data ---------- */
+async function load(){try{S=await (await fetch('/api/state')).json();fill();}catch(e){}}
 setInterval(async()=>{try{const m=await (await fetch('/api/meter')).json();
- $('mL').style.height=Math.min(100,m.l*100)+'%';$('mR').style.height=Math.min(100,m.r*100)+'%';
- $('grbar').style.width=Math.min(100,-m.gr/24*100)+'%';$('gr_v').textContent=m.gr+' dB';$('clipct').textContent=m.clip;}catch(e){}},300);
-setInterval(async()=>{try{const r=await (await fetch('/api/rta')).json();RT=r.rta;if($('pg-eq').classList.contains('act'))drawCurve();}catch(e){}},600);
-load();
+  $('mLf').style.height=Math.min(100,m.l*100)+'%';$('mRf').style.height=Math.min(100,m.r*100)+'%';$('mMf').style.height=Math.min(100,Math.max(m.l,m.r)*100)+'%';
+  $('grbar').style.width=Math.min(100,-m.gr/24*100)+'%';$('gr_v').textContent=m.gr+' dB';$('clipct').textContent=m.clip;}catch(e){}},300);
+setInterval(async()=>{try{const r=await (await fetch('/api/rta')).json();RT=r.rta;if(tab=='eq')draw();}catch(e){}},600);
+window.addEventListener('resize',()=>{fitCv();draw();});
+fitCv();bind();load();
 </script></body></html>
 )HTML";
 
