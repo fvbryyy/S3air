@@ -1,0 +1,8 @@
+# Kredensial WiFi lokal - JANGAN PERNAH commit file ini
+S3Air_USB/wifi_config.h
+
+# Hasil build
+*.bin
+*.elf
+*.map
+.DS_Store
