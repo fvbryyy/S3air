@@ -103,6 +103,7 @@ ceiling xfOn xfAmt width mono balance dlyL dlyR`, per band
 
 ## 8. Riwayat versi
 
+- **v3.3 S3 Air** - spektrum (RTA) dibuat hidup: balistik analyzer beneran (serangan seketika, jatuh +-22 dB/detik, puncak per band), bar jatuh ke lantai saat audio berhenti (tidak membeku lagi), panel mengambil data 150 ms + interpolasi gerak halus di layar.
 - **v3.2 S3 Air** - perbaikan bunyi: jalur audio dikembalikan ke 16-bit/48 kHz penuh (UAC + I2S + DSP). Jalur 24-bit v3.0-v3.1 terbukti tidak mengalirkan audio di ESP32-S3 (core hanya mendukung UAC 16-bit di S3; 24-bit khusus ESP32-P4, sesuai contoh resmi core).
 - **v3.1 S3 Air** - panel web gaya X Air versi simple (satu fokus per tab,
   grafik meregang penuh, fader panjang), nama proyek jadi S3 Air,

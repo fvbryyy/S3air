@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v3.2 S3 Air"
+#define FW_VERSION "v3.3 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -566,6 +566,9 @@ static void setupAudio() {
 static float rtaLevels[NUM_GEQ];
 static void computeRTA() {
   static float re[1024], im[1024];
+  static uint32_t lastWr = 0xFFFFFFFF;
+  bool rtaStale = (rtaWr == lastWr); // buffer tidak maju = audio berhenti -> bar harus jatuh, bukan membeku
+  lastWr = rtaWr;
   for (int i = 0; i < 1024; i++) {
     float v = rtaBuf[(rtaWr + i) & 1023];
     float win = 0.5f - 0.5f * cosf(2.0f * PI * i / 1023.0f);
@@ -593,12 +596,13 @@ static void computeRTA() {
     float fLo = GEQ_FREQ[b] * 0.89f, fHi = GEQ_FREQ[b] * 1.12f;
     int kLo = (int)(fLo * 1024 / SAMPLE_RATE), kHi = (int)(fHi * 1024 / SAMPLE_RATE);
     if (kLo < 1) kLo = 1; if (kHi <= kLo) kHi = kLo + 1; if (kHi > 511) kHi = 511;
-    float acc = 0; int cnt = 0;
-    for (int k = kLo; k < kHi; k++) { acc += sqrtf(re[k] * re[k] + im[k] * im[k]); cnt++; }
-    float mag = cnt ? acc / cnt / 256.0f : 0;
-    float db = 20.0f * log10f(mag + 1e-6f);
-    float newLevel = constrain(db, -60.0f, 0.0f);
-    rtaSmooth[b] += (newLevel - rtaSmooth[b]) * 0.15f;
+    float peak = 0;
+    for (int k = kLo; k < kHi; k++) { float m = sqrtf(re[k] * re[k] + im[k] * im[k]); if (m > peak) peak = m; }
+    float db = 20.0f * log10f(peak / 256.0f + 1e-6f);
+    float newLevel = rtaStale ? -60.0f : constrain(db, -60.0f, 0.0f);
+    // balistik analyzer: serangan seketika, jatuh +-22 dB/detik (per hitungan 100 ms)
+    if (newLevel > rtaSmooth[b]) rtaSmooth[b] = newLevel;
+    else { rtaSmooth[b] -= 2.2f; if (rtaSmooth[b] < newLevel) rtaSmooth[b] = newLevel; }
     rtaLevels[b] = rtaSmooth[b];
   }
 }
@@ -997,7 +1001,7 @@ body{height:100dvh}
 
 <script>
 const $=id=>document.getElementById(id);
-let S=null, tab='eq', sel=0, RT=new Array(31).fill(-60), snapA=null, snapB=null, abIsB=false;
+let S=null, tab='eq', sel=0, RT=new Array(31).fill(-60), RTs=new Array(31).fill(-60), snapA=null, snapB=null, abIsB=false;
 const BCOL=['#37c8d9','#4dabf7','#69db7c','#ffd43b','#ffa94d','#f06595','#b197fc','#ff8787','#63e6be','#e599f7'];
 const GEQF=[20,25,31.5,40,50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000,12500,16000,20000];
 const FS=48000;
@@ -1062,7 +1066,7 @@ function draw(){
   // RTA
   const bw=W/31;
   ctx.fillStyle='#2b5ea7';
-  for(let i=0;i<31;i++){const v=Math.min(Math.max((RT[i]+60)/60,0),1);ctx.fillRect(i*bw+1,H-v*H,bw-2,v*H);}
+  for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(i*bw+1,H-v*H,bw-2,v*H);}
   // grid
   ctx.strokeStyle='#26262a';ctx.fillStyle='#666';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
   [20,50,100,200,500,1000,2000,5000,10000,20000].forEach(f=>{const x=xFor(f,W);ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();ctx.fillText(fmtF(f),x+2,H-4);});
@@ -1297,7 +1301,9 @@ async function load(){try{S=await (await fetch('/api/state')).json();fill();}cat
 setInterval(async()=>{try{const m=await (await fetch('/api/meter')).json();
   $('mLf').style.height=Math.min(100,m.l*100)+'%';$('mRf').style.height=Math.min(100,m.r*100)+'%';$('mMf').style.height=Math.min(100,Math.max(m.l,m.r)*100)+'%';
   $('grbar').style.width=Math.min(100,-m.gr/24*100)+'%';$('gr_v').textContent=m.gr+' dB';$('clipct').textContent=m.clip;}catch(e){}},300);
-setInterval(async()=>{try{const r=await (await fetch('/api/rta')).json();RT=r.rta;if(tab=='eq')draw();}catch(e){}},600);
+let rtBusy=false;
+setInterval(async()=>{if(rtBusy)return;rtBusy=true;try{const r=await (await fetch('/api/rta')).json();RT=r.rta;}catch(e){}rtBusy=false;},150);
+setInterval(()=>{let moved=false;for(let i=0;i<31;i++){const d=RT[i]-RTs[i];if(Math.abs(d)>0.05){RTs[i]+=d*(d>0?0.55:0.16);moved=true;}}if(moved&&tab=='eq')draw();},50);
 window.addEventListener('resize',()=>{fitCv();draw();});
 fitCv();bind();load();
 </script></body></html>
@@ -1528,6 +1534,6 @@ void loop() {
   wifiPoll();
   serialPoll();
   static uint32_t lastRta = 0;
-  if (millis() - lastRta > 140) { lastRta = millis(); computeRTA(); }
+  if (millis() - lastRta > 100) { lastRta = millis(); computeRTA(); }
   delay(2);
 }
