@@ -1,7 +1,7 @@
 # S3 Air
 
 USB DAC + DSP berbasis **ESP32-S3 N16R8** dan DAC I2S **PCM5102**.
-Komputer membaca alat ini sebagai soundcard USB **24-bit / 48 kHz**;
+Komputer membaca alat ini sebagai soundcard USB **16-bit / 48 kHz**;
 semua pengolahan suara dikerjakan task DSP khusus (FreeRTOS, Core 1)
 dan diatur dari panel web di jaringan rumah (`http://mbahdac.local`)
 atau lewat perintah serial di port COM.
@@ -67,5 +67,5 @@ state
 - Rilis baru dari mbah → `git pull` di PC → upload via Arduino IDE.
 - Edit lokal di PC → `git add -A && git commit -m "pesan" && git push`.
 
-Versi firmware saat ini: **v3.1 S3 Air** — panel web gaya X Air (simple, satu fokus per tab). (Proyek ini sebelumnya bernama MbahDAC;
+Versi firmware saat ini: **v3.2 S3 Air** — panel web gaya X Air (simple, satu fokus per tab). (Proyek ini sebelumnya bernama MbahDAC;
 identitas USB & alamat panel masih `MbahDAC USB` / `mbahdac.local`).

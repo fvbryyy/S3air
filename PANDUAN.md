@@ -1,7 +1,7 @@
 # Panduan S3 Air
 
 USB DAC + DSP berbasis ESP32-S3 (N16R8) dan DAC I2S PCM5102.
-Windows membaca alat ini sebagai soundcard USB **24-bit / 48 kHz** bernama
+Windows membaca alat ini sebagai soundcard USB **16-bit / 48 kHz** bernama
 `MbahDAC USB`. Semua pengolahan suara dikerjakan task DSP khusus (FreeRTOS,
 Core 1); USB dan DSP bertukar sampel lewat ring buffer.
 
@@ -46,7 +46,7 @@ tab Sistem di panel web; nilai panel tersimpan di NVS alat dan menimpa
 
 1. Samakan setting IDE di atas, pilih port COM alat, Upload.
 2. Cek Windows: Sound -> `MbahDAC USB` -> Properties -> Advanced harus
-   terbaca **24 bit, 48000 Hz**.
+   terbaca **16 bit, 48000 Hz**.
 3. Buka panel: `http://mbahdac.local` (HP/PC di WiFi yang sama), atau
    alamat IP alat (tertera di tab Sistem & Serial Monitor).
 
@@ -103,10 +103,11 @@ ceiling xfOn xfAmt width mono balance dlyL dlyR`, per band
 
 ## 8. Riwayat versi
 
+- **v3.2 S3 Air** - perbaikan bunyi: jalur audio dikembalikan ke 16-bit/48 kHz penuh (UAC + I2S + DSP). Jalur 24-bit v3.0-v3.1 terbukti tidak mengalirkan audio di ESP32-S3 (core hanya mendukung UAC 16-bit di S3; 24-bit khusus ESP32-P4, sesuai contoh resmi core).
 - **v3.1 S3 Air** - panel web gaya X Air versi simple (satu fokus per tab,
   grafik meregang penuh, fader panjang), nama proyek jadi S3 Air,
   kode & komentar dirapikan, panduan dipindah ke file ini.
-- **v3.0 Gabungan** - audio 24-bit/48 kHz, DSP pindah ke task RTOS
+- **v3.0 Gabungan** - audio 24-bit/48 kHz (ditarik di v3.2), DSP pindah ke task RTOS
   (Core 1) + ring buffer SPSC + statistik underrun/overflow,
   kontrol serial Serial0.
 - **v2.0** - DSP lengkap (PEQ 10 band + Dynamic EQ, GEQ 31, gate,

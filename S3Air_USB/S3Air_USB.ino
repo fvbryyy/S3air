@@ -1,6 +1,7 @@
 // ============================================================
 //  S3 Air - USB DAC + DSP Console
-//  ESP32-S3 (N16R8) + PCM5102 | USB Audio 24-bit / 48 kHz
+//  ESP32-S3 (N16R8) + PCM5102 | USB Audio 16-bit / 48 kHz
+//  (core ESP32-S3 hanya mendukung UAC 16-bit; jalur 24-bit khusus ESP32-P4)
 //  DSP di task FreeRTOS (Core 1); kontrol panel web + serial.
 //  Versi firmware: FW_VERSION di bawah. Panduan lengkap,
 //  setting IDE & wiring: lihat PANDUAN.md di repo ini.
@@ -29,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v3.1 S3 Air"
+#define FW_VERSION "v3.2 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -292,7 +293,7 @@ static float estimateEqPeakDb() {
 // ============================================================
 //  Pemrosesan audio (callback USBAudioCard)
 // ============================================================
-USBAudioCard uac(48000, UAC_BPS_24, UAC_SPK_STEREO, UAC_MIC_NONE); // 24-bit dalam slot 32-bit (ala DQ-DSP)
+USBAudioCard uac(48000, UAC_BPS_16, UAC_SPK_STEREO, UAC_MIC_NONE); // 16-bit/48kHz - format UAC yang didukung core di S3
 I2SClass i2s;
 
 static inline float runBiquad(BiquadCoef &c, BiquadState &s, float x, bool left) {
@@ -324,13 +325,13 @@ static void rebuildDynCoefs() {
 //  RTOS: ring SPSC — callback USB ringan, DSP di task khusus Core 1
 // ============================================================
 #define RING_FRAMES 4096
-static int32_t ringIn[RING_FRAMES * 2], ringOut[RING_FRAMES * 2];
+static int16_t ringIn[RING_FRAMES * 2], ringOut[RING_FRAMES * 2];
 static volatile uint32_t ringInW = 0, ringInR = 0, ringOutW = 0, ringOutR = 0;
 static volatile uint32_t statUnderrun = 0, statOverflow = 0;
 static TaskHandle_t dspTaskHandle = NULL;
-static int32_t dspBlock[512 * 2];
+static int16_t dspBlock[512 * 2];
 
-static void processBlock(int32_t *s, int frames) {
+static void processBlock(int16_t *s, int frames) {
   BiquadCoef *mb = mainBank[activeBank];
   BiquadCoef *gb = geqBank[activeBank];
 
@@ -405,7 +406,7 @@ static void processBlock(int32_t *s, int frames) {
       }
     }
 
-    float L = s[2 * n] * (1.0f / 2147483648.0f), R = s[2 * n + 1] * (1.0f / 2147483648.0f);
+    float L = s[2 * n] * (1.0f / 32768.0f), R = s[2 * n + 1] * (1.0f / 32768.0f);
     L *= smoothPreamp * smoothTrimL; R *= smoothPreamp * smoothTrimR;
 
     if (params.eqMode == 0) {
@@ -482,8 +483,8 @@ static void processBlock(int32_t *s, int frames) {
     rtaBuf[rtaWr] = (L + R) * 0.5f; rtaWr = (rtaWr + 1) & 1023;
 
     float oL = constrain(L, -1.0f, 1.0f), oR = constrain(R, -1.0f, 1.0f);
-    s[2 * n] = (int32_t)(oL * 2147483647.0f);
-    s[2 * n + 1] = (int32_t)(oR * 2147483647.0f);
+    s[2 * n] = (int16_t)(oL * 32767.0f);
+    s[2 * n + 1] = (int16_t)(oR * 32767.0f);
   }
   if (frames > 0) {
     meterRmsL = sqrtf(sumL / frames); meterRmsR = sqrtf(sumR / frames);
@@ -492,8 +493,8 @@ static void processBlock(int32_t *s, int frames) {
 
 static void onSpkData(void *data, uint16_t len) {
   uac.applyVolume(data, len);
-  int32_t *s = (int32_t *)data;
-  int frames = len / 8;
+  int16_t *s = (int16_t *)data;
+  int frames = len / 4;
   // dorong input mentah ke ringIn (buang + hitung bila penuh)
   uint32_t w = ringInW;
   for (int n = 0; n < frames; n++) {
@@ -547,7 +548,7 @@ static void dspTask(void *arg) {
 
 static void setupAudio() {
   i2s.setPins(PIN_BCK, PIN_LRCK, PIN_DIN, -1);
-  i2s.begin(I2S_MODE_STD, 48000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH);
+  i2s.begin(I2S_MODE_STD, 48000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH);
   // Identitas USB sendiri (nama tampil di Windows sebagai perangkat audio).
   // WAJIB tanpa CDC (CDCOnBoot Disabled di menu IDE) — lihat catatan di atas.
   USB.productName("MbahDAC USB");
