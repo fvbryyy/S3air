@@ -103,6 +103,7 @@ ceiling xfOn xfAmt width mono balance dlyL dlyR`, per band
 
 ## 8. Riwayat versi
 
+- **v3.6 S3 Air** - perapian simetri panel: bank fader kini mengisi penuh lebar layar (strip band melebar merata, tidak ada lagi celah kosong sebelum strip MAIN), semua kotak editor/parameter menjadi grid kolom sama lebar, preset pabrik - **v3.5 S3 Air** slot user jadi grid rapi, tinggi minimum paksa editor dicabut, dan pada mode GEQ chip + editor PEQ disembunyikan (bukan wilayahnya) agar tidak ada blok sisa.
 - **v3.5 S3 Air** - perbaikan meter VU: kolom meter L/R di kanan spektrum akhirnya tampil (rantai tinggi CSS-nya putus sehingga kolom menyusut ~0px dan isinya bergerak di ruang tak terlihat; kini kolom mengisi penuh tinggi display). Bukti uji: data /api/meter sehat - **v3.4 S3 Air** kode panel terbukti menerapkan nilai dengan benar di pengujian lokal. Di HP, pill info WiFi disembunyikan agar pill CLIP tidak terdesak keluar layar.
 - **v3.4 S3 Air** - tata letak HP dirapikan total: halaman jadi satu kolom yang bisa di-scroll wajar (tidak lagi dipaksa seukuran layar), header - **v3.3 S3 Air** chip band satu baris bisa digeser, grafik 290px sehingga meter VU L/R di kanan spektrum tampil penuh - **v3.3 S3 Air** bergerak, bank fader lengket di bawah layar dengan strip MAIN selalu terjangkau di kanan.
 - **v3.3 S3 Air** - spektrum (RTA) dibuat hidup: balistik analyzer beneran (serangan seketika, jatuh +-22 dB/detik, puncak per band), bar jatuh ke lantai saat audio berhenti (tidak membeku lagi), panel mengambil data 150 ms + interpolasi gerak halus di layar.

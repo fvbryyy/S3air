@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v3.5 S3 Air"
+#define FW_VERSION "v3.6 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -876,6 +876,19 @@ body{height:100dvh}
 @media (max-width:900px){.strip input.vfader{height:165px}#masterstrip input.vfader{height:165px}}
 #dispwrap>div{display:flex;flex-direction:column;gap:4px;min-height:0}
 #dispmeter{flex:1;min-height:0}
+/* --- simetri & anti blok kosong (v3.6) --- */
+.strip{flex:1 1 0;min-width:0}
+#masterstrip{flex:0 0 112px;margin-left:0}
+#bandbar{min-height:0}
+.boxes{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:6px}
+#factory{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:5px}
+#slots{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:5px}
+@media (max-width:900px){
+  .strip{flex:0 0 68px}
+  #masterstrip{flex:0 0 92px}
+  .boxes{grid-template-columns:1fr 1fr}
+  #pg-eq .boxes .box:nth-child(5){grid-column:span 2}
+}
 
 <style>
 @media (max-width:900px){
@@ -1238,6 +1251,8 @@ function fill(){
   $('trimL').value=S.trimL;$('trimR').value=S.trimR; tgl('polL',S.polL);tgl('polR',S.polR);
   tgl('hpfOn',S.hpfOn);$('hpfFreq').value=S.hpfFreq;$('hpfSlope').value=S.hpfSlope;
   tgl('modePeq',S.eqMode==0);tgl('modeGeq',S.eqMode==1);tgl('bypass',S.bypass);
+  $('chips').style.display=S.eqMode==0?'':'none';
+  document.querySelector('#pg-eq .boxes').style.display=S.eqMode==0?'':'none';
   tgl('loud',S.loud);tgl('autoHr',S.autoHr);
   tgl('gateOn',S.gateOn);$('gateThr').value=S.gateThr;$('gateAtk').value=S.gateAtk;$('gateRel').value=S.gateRel;
   tgl('compOn',S.compOn);$('compThr').value=S.compThr;$('compRatio').value=S.compRatio;$('compAtk').value=S.compAtk;$('compRel').value=S.compRel;$('compMake').value=S.compMake;
