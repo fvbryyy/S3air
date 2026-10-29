@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v3.7 S3 Air"
+#define FW_VERSION "v3.8 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -878,6 +878,13 @@ body{height:100dvh}
 #dispmeter{flex:1;min-height:0}
 /* --- simetri & anti blok kosong (v3.6) --- */
 #strips{flex:1;min-width:0}
+/* --- v3.8: bank melayang aman + anti ketutup --- */
+#faderbank{position:fixed;left:0;right:0;bottom:0;z-index:6;width:100%}
+body{padding-bottom:268px}
+.row{flex-wrap:wrap}
+#pg-preset .boxes{align-items:start}
+#pg-main input[type=number]{width:58px}
+@media (max-width:900px){body{padding-bottom:232px}}
 #pg-eq .boxes input[type=range]{flex:1;min-width:50px}
 .strip{flex:1 1 0;min-width:0}
 #masterstrip{flex:0 0 112px;margin-left:0}
