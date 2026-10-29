@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v3.3 S3 Air"
+#define FW_VERSION "v3.4 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -874,6 +874,24 @@ body{height:100dvh}
 .strip input.vfader{height:185px}
 #masterstrip input.vfader{height:185px}
 @media (max-width:900px){.strip input.vfader{height:165px}#masterstrip input.vfader{height:165px}}
+
+<style>
+@media (max-width:900px){
+  body{height:auto;min-height:100dvh}
+  #topbar{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  #topbar>*{flex:none}
+  #work{display:block;min-height:0}
+  #stage{display:block}
+  #dispwrap{height:290px;flex:none}
+  #graph{height:100%;min-height:0;flex:none}
+  .chips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:4px}
+  .chip{flex:none}
+  #bandbar .mrow{flex-wrap:wrap;justify-content:flex-start}
+  #faderbank{position:sticky;bottom:0;z-index:6;box-shadow:0 -4px 14px rgba(0,0,0,.5)}
+  #masterstrip{position:sticky;right:0;background:#26262a}
+  .strip input.vfader{height:150px}
+  #masterstrip input.vfader{height:150px}
+}
 </style></head>
 <body>
 <div id="topbar">
@@ -1300,7 +1318,7 @@ function bind(){
 async function load(){try{S=await (await fetch('/api/state')).json();fill();}catch(e){}}
 setInterval(async()=>{try{const m=await (await fetch('/api/meter')).json();
   $('mLf').style.height=Math.min(100,m.l*100)+'%';$('mRf').style.height=Math.min(100,m.r*100)+'%';$('mMf').style.height=Math.min(100,Math.max(m.l,m.r)*100)+'%';
-  $('grbar').style.width=Math.min(100,-m.gr/24*100)+'%';$('gr_v').textContent=m.gr+' dB';$('clipct').textContent=m.clip;}catch(e){}},300);
+  $('grbar').style.width=Math.min(100,-m.gr/24*100)+'%';$('gr_v').textContent=m.gr+' dB';$('clipct').textContent=m.clip;}catch(e){}},200);
 let rtBusy=false;
 setInterval(async()=>{if(rtBusy)return;rtBusy=true;try{const r=await (await fetch('/api/rta')).json();RT=r.rta;}catch(e){}rtBusy=false;},150);
 setInterval(()=>{let moved=false;for(let i=0;i<31;i++){const d=RT[i]-RTs[i];if(Math.abs(d)>0.05){RTs[i]+=d*(d>0?0.55:0.16);moved=true;}}if(moved&&tab=='eq')draw();},50);
