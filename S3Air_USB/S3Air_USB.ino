@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v3.8 S3 Air"
+#define FW_VERSION "v3.9 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -917,6 +917,32 @@ body{padding-bottom:268px}
   .strip input.vfader{height:150px}
   #masterstrip input.vfader{height:150px}
 }
+
+/* ===== v3.9 BROADCAST NEON ===== */
+:root{--bg:#05070d;--panel:#0b1018;--panel2:#0e1622;--line:#22344d;--txt:#e8f3ff;--dim:#7d92ad;--teal:#22d3ee;--teal2:#0e7490;--org:#f471b5;--blue:#2563eb}
+body{background:#05070d;background-image:radial-gradient(1000px 340px at 50% -120px,rgba(14,116,144,.38),rgba(5,7,13,0) 70%)}
+#topbar{background:linear-gradient(180deg,#0d1626,#070b13);border-bottom:1px solid #22344d;box-shadow:0 2px 18px rgba(34,211,238,.10)}
+#logo b span{color:#22d3ee;text-shadow:0 0 14px rgba(34,211,238,.75)}
+.tabbtn{background:#0a111f;border-color:#1d2a3d;color:#a9c2da;border-radius:8px}
+.tabbtn.act{background:#0d1f30;border-bottom:3px solid #22d3ee;color:#fff;box-shadow:0 0 16px rgba(34,211,238,.22)}
+.tabbtn.act svg{stroke:#22d3ee}
+#netpill{background:#07141d;border-color:#0e7490;color:#7fe3f0;border-radius:8px}
+#cliplamp{border-radius:8px}
+.card{background:linear-gradient(180deg,#0c1322,#080d16);border-color:#22344d;border-radius:12px}
+#dispwrap{background:#04070d;border-color:#22344d;border-radius:12px;box-shadow:inset 0 0 46px rgba(34,211,238,.05)}
+.box{background:#0c1322;border-color:#22344d;border-radius:10px}
+.tgl{background:#0a111f;border-color:#22344d;color:#cfe6f5;border-radius:8px}
+.tgl.on{background:#22d3ee;border-color:#22d3ee;color:#04121a;font-weight:bold;box-shadow:0 0 14px rgba(34,211,238,.45)}
+.tgl.red.on{background:#f43f5e;border-color:#f43f5e;color:#fff;box-shadow:0 0 14px rgba(244,63,94,.45)}
+.chip{background:#0c1322;border-color:#22344d;border-radius:8px}
+.chip.sel{background:#10303f;outline:2px solid #22d3ee;color:#fff}
+select{background:#0a111f;border-color:#22344d;border-radius:8px}
+input[type=number],input[type=text]{background:#0a0f18;border:1px solid #22344d;color:var(--txt);border-radius:8px}
+input[type=range]{accent-color:#22d3ee}
+#faderbank{background:linear-gradient(180deg,#0c1424,#05080f);border-top:2px solid #22d3ee;box-shadow:0 -4px 26px rgba(34,211,238,.20)}
+.strip{background:#0a111f;border-color:#22344d;border-radius:10px}
+#masterstrip{background:#160a14;border-color:#f471b5;box-shadow:0 0 18px rgba(244,113,181,.22);border-radius:10px}
+::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#22344d;border-radius:4px}::-webkit-scrollbar-track{background:transparent}
 </style></head>
 <body>
 <div id="topbar">
@@ -1104,21 +1130,21 @@ function dbForY(y,H){return (1-y/H)*30-15;}
 function draw(){
   if(!S)return;
   const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
-  ctx.fillStyle='#050505';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#04070d';ctx.fillRect(0,0,W,H);
   if(tab=='gate'||tab=='comp')return drawDyn(W,H);
   // RTA
   const bw=W/31;
-  ctx.fillStyle='#2b5ea7';
+  ctx.fillStyle='rgba(34,211,238,0.55)';
   for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(i*bw+1,H-v*H,bw-2,v*H);}
   // grid
-  ctx.strokeStyle='#26262a';ctx.fillStyle='#666';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
+  ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
   [20,50,100,200,500,1000,2000,5000,10000,20000].forEach(f=>{const x=xFor(f,W);ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();ctx.fillText(fmtF(f),x+2,H-4);});
-  [12,6,0,-6,-12].forEach(db=>{const y=yFor(db,H);ctx.strokeStyle=db==0?'#3d3d42':'#26262a';ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.fillStyle='#666';ctx.fillText((db>0?'+':'')+db,3,y-3);});
+  [12,6,0,-6,-12].forEach(db=>{const y=yFor(db,H);ctx.strokeStyle=db==0?'#27435f':'#182635';ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.fillStyle='#5f7d99';ctx.fillText((db>0?'+':'')+db,3,y-3);});
   // kurva total
   const N=140;ctx.beginPath();
   for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,totalDb(f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}
-  ctx.strokeStyle='#e8930c';ctx.lineWidth=2.2;ctx.stroke();
-  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle='rgba(232,147,12,0.30)';ctx.fill();
+  ctx.strokeStyle='#22d3ee';ctx.lineWidth=2.2;ctx.stroke();
+  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle='rgba(34,211,238,0.16)';ctx.fill();
   // kurva band terpilih
   if(S.eqMode==0){const b=S.bands[sel];if(b.on){ctx.beginPath();for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,respDb(coef(b.t,b.f,b.g,b.q),f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.strokeStyle=BCOL[sel];ctx.lineWidth=1.2;ctx.stroke();}}
   // titik node
@@ -1129,21 +1155,21 @@ function draw(){
       ctx.fillStyle='#0a0a0a';ctx.font='bold 11px Arial';ctx.textAlign='center';ctx.fillText(i+1,x,y+4);ctx.textAlign='left';}
   }else{
     for(let i=0;i<31;i++){const x=xFor(GEQF[i],W),y=yFor(S.geq[i],H);
-      ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fillStyle='#e8930c';ctx.fill();ctx.strokeStyle='#111';ctx.stroke();}
+      ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fillStyle='#22d3ee';ctx.fill();ctx.strokeStyle='#111';ctx.stroke();}
   }
 }
 function drawDyn(W,H){
   const x0=40,x1=W-8,y0=8,y1=H-22;
   const X=v=>x0+(v+60)/60*(x1-x0), Y=v=>y0+(1-(v+60)/60)*(y1-y0);
-  ctx.strokeStyle='#26262a';ctx.fillStyle='#666';ctx.font='10px Arial';
+  ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.font='10px Arial';
   for(let v=-50;v<0;v+=10){ctx.beginPath();ctx.moveTo(X(v),y0);ctx.lineTo(X(v),y1);ctx.stroke();ctx.beginPath();ctx.moveTo(x0,Y(v));ctx.lineTo(x1,Y(v));ctx.stroke();ctx.fillText(v,X(v)-4,y1+12);ctx.fillText(v,6,Y(v)+3);}
-  ctx.strokeStyle='#3d3d42';ctx.beginPath();ctx.moveTo(X(-60),Y(-60));ctx.lineTo(X(0),Y(0));ctx.stroke();
+  ctx.strokeStyle='#27435f';ctx.beginPath();ctx.moveTo(X(-60),Y(-60));ctx.lineTo(X(0),Y(0));ctx.stroke();
   ctx.beginPath();
   for(let i=0;i<=120;i++){const inn=-60+60*i/120;let out;
     if(tab=='gate'){out=!S.gateOn?inn:(inn>S.gateThr?inn:-60);}
     else{out=inn;if(S.compOn&&inn>S.compThr)out=S.compThr+(inn-S.compThr)/Math.max(S.compRatio,1);out+=S.compOn?S.compMake:0;if(S.limiter)out=Math.min(out,S.ceiling);}
     out=Math.max(-60,Math.min(3,out));const px=X(inn),py=Y(out);i?ctx.lineTo(px,py):ctx.moveTo(px,py);}
-  ctx.strokeStyle='#e8930c';ctx.lineWidth=2.2;ctx.stroke();
+  ctx.strokeStyle='#22d3ee';ctx.lineWidth=2.2;ctx.stroke();
   if(tab=='comp'&&S.limiter){ctx.strokeStyle='#e03131';ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(x0,Y(S.ceiling));ctx.lineTo(x1,Y(S.ceiling));ctx.stroke();ctx.setLineDash([]);}
 }
 
