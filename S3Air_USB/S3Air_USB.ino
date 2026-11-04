@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v4.1 S3 Air"
+#define FW_VERSION "v4.3 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -1053,7 +1053,7 @@ input[type=range]{accent-color:#22d3ee}
       </section>
     </div><aside id="tower"><div class="towIn">
       <div class="tscrib">MAIN LR</div>
-      <div class="towMid"><div class="mcol towM"><div class="mfill" id="tLf"></div></div><input type="range" class="vfader" id="tvol" min="0" max="1" step="0.01" value="0.75"><div class="mcol towM"><div class="mfill" id="tRf"></div></div></div>
+      <div class="towMid"><div class="towMeters"><div class="mcol towM"><div class="mfill" id="tLf"></div></div><div class="mcol towM"><div class="mfill" id="tRf"></div></div></div><input type="range" class="vfader" id="tvol" min="0" max="1" step="0.01" value="0.75"></div>
       <div id="tvolDb">-2.5 dB</div>
       <button class="tgl red onled" id="tmute">MUTE</button>
     </div></aside></div>
@@ -1081,7 +1081,8 @@ input[type=range]{accent-color:#22d3ee}
 #tower{display:none}
 .towIn{position:absolute;top:0;left:0;right:0;bottom:-260px;z-index:7;background:#160a14;border:1px solid #f471b5;border-radius:12px;box-shadow:0 0 18px rgba(244,113,181,.22);display:flex;flex-direction:column;align-items:center;padding:10px;gap:9px}
 .tscrib{width:100%;text-align:center;background:var(--red);color:#fff;font-weight:bold;font-size:13px;letter-spacing:1px;border-radius:6px;padding:5px 0}
-.towMid{flex:1;display:flex;gap:10px;justify-content:center;width:100%;min-height:0}
+.towMid{flex:1;display:flex;gap:10px;justify-content:space-between;width:100%;min-height:0;padding:0 12px}
+.towMeters{display:flex;gap:6px;min-height:0}
 .towM{flex:0 0 16px}
 #tvol{width:30px;height:auto}
 #tvolDb{font-family:var(--mono);font-size:19px;font-weight:bold}
@@ -1103,10 +1104,43 @@ input[type=range]{accent-color:#22d3ee}
 .towM::after{content:'';position:absolute;inset:0;background:repeating-linear-gradient(180deg,transparent 0 7px,rgba(0,0,0,.55) 7px 9px);pointer-events:none}
 @media (max-width:900px){.tabbtn{padding:7px 13px;min-height:40px}}
 </style>
+<style>
+/* ===== S3 Air v4.3 - warna SOFT + kap fader mixer ===== */
+:root{--teal:#63c7de;--teal2:#3d7e94;--org:#e79ec3}
+body{background:radial-gradient(1100px 420px at 50% -140px,rgba(99,199,222,.07),transparent 62%),#05070d}
+#logo b span{color:#63c7de;text-shadow:0 0 10px rgba(99,199,222,.35)}
+#dispwrap{box-shadow:inset 0 0 46px rgba(99,199,222,.03)}
+.tabbtn.act{background:#63c7de;border-color:#63c7de;box-shadow:0 0 10px rgba(99,199,222,.25)}
+.tgl.on{background:#63c7de;border-color:#63c7de;box-shadow:0 0 10px rgba(99,199,222,.25)}
+.chip.sel{outline-color:#63c7de}
+input[type=range]{accent-color:#63c7de}
+#faderbank{border-top-color:#63c7de;box-shadow:0 -4px 18px rgba(99,199,222,.12)}
+#masterstrip{border-color:#e79ec3;box-shadow:0 0 12px rgba(231,158,195,.16)}
+.towIn{border-color:#e79ec3;box-shadow:0 0 12px rgba(231,158,195,.16)}
+/* --- kap fader mixer --- */
+input[type=range]{-webkit-appearance:none;appearance:none;background:transparent;height:22px;--capline:#63c7de}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:#101114;border:1px solid #000;box-shadow:inset 0 1px 3px rgba(0,0,0,.8)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:24px;margin-top:-10px;border-radius:3px;border:1px solid #000;background:linear-gradient(90deg,transparent 40%,var(--capline) 40%,var(--capline) 60%,transparent 60%),linear-gradient(180deg,#43464e,#1a1b1f 55%,#2e3138);box-shadow:0 2px 6px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.20)}
+input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:#101114;border:1px solid #000}
+input[type=range]::-moz-range-thumb{width:15px;height:24px;border-radius:3px;border:1px solid #000;background:linear-gradient(90deg,transparent 40%,var(--capline) 40%,var(--capline) 60%,transparent 60%),linear-gradient(180deg,#43464e,#1a1b1f 55%,#2e3138)}
+input.vfader{height:auto;width:40px;transform:translateX(4.5px)}
+input.vfader::-webkit-slider-runnable-track{width:9px;height:auto;background:linear-gradient(180deg,transparent 49.2%,rgba(230,240,250,.38) 49.2%,rgba(230,240,250,.38) 50.8%,transparent 50.8%),linear-gradient(90deg,#08090b,#191a1e 45%,#26282e 55%,#08090b);border:1px solid #000;border-radius:5px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05),inset 0 0 12px rgba(0,0,0,.8)}
+input.vfader::-webkit-slider-thumb{width:40px;height:21px;margin-top:0;border-radius:4px;background:linear-gradient(180deg,transparent 42%,var(--capline) 42%,var(--capline) 58%,transparent 58%),repeating-linear-gradient(90deg,transparent 0 7px,rgba(0,0,0,.30) 7px 8px),linear-gradient(180deg,#43464e,#1a1b1f 55%,#2e3138);box-shadow:0 3px 8px rgba(0,0,0,.65),inset 0 1px 0 rgba(255,255,255,.22)}
+input.vfader::-moz-range-track{width:9px;background:linear-gradient(180deg,transparent 49.2%,rgba(230,240,250,.38) 49.2%,rgba(230,240,250,.38) 50.8%,transparent 50.8%),#141519;border:1px solid #000;border-radius:5px}
+input.vfader::-moz-range-thumb{width:40px;height:21px;border-radius:4px;background:linear-gradient(180deg,transparent 42%,var(--capline) 42%,var(--capline) 58%,transparent 58%),linear-gradient(180deg,#43464e,#1a1b1f 55%,#2e3138)}
+.strip.gq input.vfader{width:30px}
+.strip.gq input.vfader::-webkit-slider-thumb{width:30px}
+.strip.gq input.vfader::-moz-range-thumb{width:30px}
+#tvol{--capline:#f08585;width:48px}
+#tvol::-webkit-slider-thumb{width:48px;height:24px}
+#tvol::-moz-range-thumb{width:48px;height:24px}
+#vol{--capline:#f08585}
+</style>
+
 <script>
 const $=id=>document.getElementById(id);
 let S=null, tab='eq', sel=0, RT=new Array(31).fill(-60), RTs=new Array(31).fill(-60), snapA=null, snapB=null, abIsB=false;
-const BCOL=['#37c8d9','#4dabf7','#69db7c','#ffd43b','#ffa94d','#f06595','#b197fc','#ff8787','#63e6be','#e599f7'];
+const BCOL=['#5ec2d6','#7db8f0','#8ad99a','#f2d06b','#f5b97f','#ef8fb5','#c3aef2','#f49a9a','#7fe0c3','#d3a6ec'];
 const GEQF=[20,25,31.5,40,50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000,12500,16000,20000];
 const FS=48000;
 function send(o){return fetch('/api/set',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(o)}).catch(()=>{});}
@@ -1169,7 +1203,7 @@ function draw(){
   if(tab=='gate'||tab=='comp')return drawDyn(W,H);
   // RTA
   const bw=W/31;
-  ctx.fillStyle='rgba(34,211,238,0.55)';
+  ctx.fillStyle='rgba(99,199,222,0.45)';
   for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(i*bw+1,H-v*H,bw-2,v*H);}
   // grid
   ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
@@ -1178,8 +1212,8 @@ function draw(){
   // kurva total
   const N=140;ctx.beginPath();
   for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,totalDb(f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}
-  ctx.strokeStyle='#22d3ee';ctx.lineWidth=2.2;ctx.stroke();
-  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle='rgba(34,211,238,0.16)';ctx.fill();
+  ctx.strokeStyle='#63c7de';ctx.lineWidth=2.2;ctx.stroke();
+  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle='rgba(99,199,222,0.12)';ctx.fill();
   // kurva band terpilih
   if(S.eqMode==0){const b=S.bands[sel];if(b.on){ctx.beginPath();for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,respDb(coef(b.t,b.f,b.g,b.q),f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.strokeStyle=BCOL[sel];ctx.lineWidth=1.2;ctx.stroke();}}
   // titik node
@@ -1190,7 +1224,7 @@ function draw(){
       ctx.fillStyle='#0a0a0a';ctx.font='bold 11px Arial';ctx.textAlign='center';ctx.fillText(i+1,x,y+4);ctx.textAlign='left';}
   }else{
     for(let i=0;i<31;i++){const x=xFor(GEQF[i],W),y=yFor(S.geq[i],H);
-      ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fillStyle='#22d3ee';ctx.fill();ctx.strokeStyle='#111';ctx.stroke();}
+      ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fillStyle='#63c7de';ctx.fill();ctx.strokeStyle='#111';ctx.stroke();}
   }
 }
 function drawDyn(W,H){
@@ -1204,13 +1238,13 @@ function drawDyn(W,H){
     if(tab=='gate'){out=!S.gateOn?inn:(inn>S.gateThr?inn:-60);}
     else{out=inn;if(S.compOn&&inn>S.compThr)out=S.compThr+(inn-S.compThr)/Math.max(S.compRatio,1);out+=S.compOn?S.compMake:0;if(S.limiter)out=Math.min(out,S.ceiling);}
     out=Math.max(-60,Math.min(3,out));const px=X(inn),py=Y(out);i?ctx.lineTo(px,py):ctx.moveTo(px,py);}
-  ctx.strokeStyle='#22d3ee';ctx.lineWidth=2.2;ctx.stroke();
+  ctx.strokeStyle='#63c7de';ctx.lineWidth=2.2;ctx.stroke();
   if(tab=='comp'&&S.limiter){ctx.strokeStyle='#e03131';ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(x0,Y(S.ceiling));ctx.lineTo(x1,Y(S.ceiling));ctx.stroke();ctx.setLineDash([]);}
 }
 
 /* ---------- interaksi grafik ---------- */
 let drag=null,lastSend=0,pendSend=null;
-function cvPos(e){const r=cv.getBoundingClientRect();return{x:(e.clientX-r.left)*(cv.width/r.width),y:(e.clientY-r.top)*(cv.height/r.height)};}
+function cvPos(e){const r=cv.getBoundingClientRect();if(!r.width||!r.height)return{x:0,y:0};return{x:(e.clientX-r.left)*(cv.width/r.width),y:(e.clientY-r.top)*(cv.height/r.height)};}
 function nodeAt(p){
   if(!S||tab!='eq')return -1;
   if(S.eqMode==0){for(let i=0;i<10;i++){const b=S.bands[i],x=xFor(b.f,cv.width),y=yFor(b.g,cv.height);if(Math.hypot(p.x-x,p.y-y)<26)return i;}}
@@ -1241,6 +1275,7 @@ cv.addEventListener('pointermove',e=>{
   }
 });
 cv.addEventListener('pointerup',()=>{drag=null;});
+cv.addEventListener('pointercancel',()=>{drag=null;});
 cv.addEventListener('dblclick',e=>{
   const id=nodeAt(cvPos(e));
   if(id>=0&&id<100){const b=S.bands[id];b.on=!b.on;send({['b'+id+'_on']:b.on?1:0});fillEditor();fillChips();fillStrips();draw();}
@@ -1408,11 +1443,16 @@ function bind(){
 async function load(){try{S=await (await fetch('/api/state')).json();fill();}catch(e){}}
 setInterval(async()=>{try{const m=await (await fetch('/api/meter')).json();
   $('mLf').style.height=Math.min(100,m.l*100)+'%';$('mRf').style.height=Math.min(100,m.r*100)+'%';$('mMf').style.height=Math.min(100,Math.max(m.l,m.r)*100)+'%';$('tLf').style.height=Math.min(100,m.l*100)+'%';$('tRf').style.height=Math.min(100,m.r*100)+'%';
-  $('grbar').style.width=Math.min(100,-m.gr/24*100)+'%';$('gr_v').textContent=m.gr+' dB';$('clipct').textContent=m.clip;}catch(e){}},200);
+  $('grbar').style.width=Math.min(100,Math.max(0,-m.gr/24*100))+'%';$('gr_v').textContent=m.gr+' dB';$('clipct').textContent=m.clip;}catch(e){}},200);
 let rtBusy=false;
 setInterval(async()=>{if(rtBusy)return;rtBusy=true;try{const r=await (await fetch('/api/rta')).json();RT=r.rta;}catch(e){}rtBusy=false;},150);
-setInterval(()=>{let moved=false;for(let i=0;i<31;i++){const d=RT[i]-RTs[i];if(Math.abs(d)>0.05){RTs[i]+=d*(d>0?0.55:0.16);moved=true;}}if(moved&&tab=='eq')draw();},50);
+setInterval(()=>{let moved=false;for(let i=0;i<31;i++){const d=RT[i]-RTs[i];if(Math.abs(d)>0.05){RTs[i]+=d*(d>0?0.55:0.16);moved=true;}}if(moved&&tab!='gate'&&tab!='comp')draw();},50);
 window.addEventListener('resize',()=>{fitCv();draw();});
+let sysBusy=false;
+setInterval(async()=>{if(tab!='sys'||sysBusy)return;sysBusy=true;try{const st=await (await fetch('/api/state')).json();
+  $('netinfo').textContent=st.net+' · http://mbahdac.local';$('fwinfo').textContent='S3 Air '+st.fw;
+  $('ringinfo').textContent='underrun '+st.ur+' · overflow '+st.ov;$('eqpeak').textContent=(st.eqPeak>=0?'+':'')+st.eqPeak+' dB';}catch(e){}sysBusy=false;},2000);
+setInterval(()=>{if(!S)load();},3000);
 fitCv();bind();load();
 </script></body></html>
 
