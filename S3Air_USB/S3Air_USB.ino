@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v3.9 S3 Air"
+#define FW_VERSION "v4.0 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -944,7 +944,7 @@ input[type=range]{accent-color:#22d3ee}
 #masterstrip{background:#160a14;border-color:#f471b5;box-shadow:0 0 18px rgba(244,113,181,.22);border-radius:10px}
 ::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#22344d;border-radius:4px}::-webkit-scrollbar-track{background:transparent}
 </style></head>
-<body>
+<body data-tab="eq">
 <div id="topbar">
   <div id="logo"><b>S3 <span>AIR</span></b><small>USB DAC · DSP</small></div>
   <button class="tabbtn act" data-tab="eq"><svg viewBox="0 0 24 24"><path d="M2 12 Q6 4 9 12 T16 8 T22 10"/></svg>EQ</button>
@@ -968,7 +968,7 @@ input[type=range]{accent-color:#22d3ee}
       </div>
     </div>
 
-    <div class="card" id="bandbar">
+    <div id="lower"><div class="card" id="bandbar">
       <section class="pg act" id="pg-eq">
         <div class="mrow" style="justify-content:flex-start;gap:6px;margin-bottom:8px">
           <button class="tgl" id="modePeq">PEQ 10</button><button class="tgl" id="modeGeq">GEQ 31</button>
@@ -1051,7 +1051,12 @@ input[type=range]{accent-color:#22d3ee}
         </div>
         <p class="note" style="margin-top:6px">Panel ini juga bisa dikendalikan lewat port COM (Serial Monitor 115200): <i>set vol=0.8</i>, <i>set b0_g=3</i>, <i>preset Bass</i>, <i>state</i>.</p>
       </section>
-    </div>
+    </div><aside id="tower"><div class="towIn">
+      <div class="tscrib">MAIN LR</div>
+      <div class="towMid"><div class="mcol towM"><div class="mfill" id="tLf"></div></div><input type="range" class="vfader" id="tvol" min="0" max="1" step="0.01" value="0.75"><div class="mcol towM"><div class="mfill" id="tRf"></div></div></div>
+      <div id="tvolDb">-2.5 dB</div>
+      <button class="tgl red onled" id="tmute">MUTE</button>
+    </div></aside></div>
   </main>
 
   
@@ -1068,6 +1073,25 @@ input[type=range]{accent-color:#22d3ee}
   </div>
 </footer>
 
+<style>
+/* ===== S3 Air v4.0 - tata letak L3 Menara Master ===== */
+#lower{display:flex;gap:6px;flex:1;min-height:0;margin-top:-6px}
+#bandbar{flex:1;min-width:0;border-top-left-radius:0;border-top-right-radius:0}
+#dispwrap{border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom:none}
+#tower{display:none}
+.towIn{position:absolute;top:0;left:0;right:0;bottom:-260px;z-index:7;background:#160a14;border:1px solid #f471b5;border-radius:12px;box-shadow:0 0 18px rgba(244,113,181,.22);display:flex;flex-direction:column;align-items:center;padding:10px;gap:9px}
+.tscrib{width:100%;text-align:center;background:var(--red);color:#fff;font-weight:bold;font-size:13px;letter-spacing:1px;border-radius:6px;padding:5px 0}
+.towMid{flex:1;display:flex;gap:10px;justify-content:center;width:100%;min-height:0}
+.towM{flex:0 0 16px}
+#tvol{width:30px;height:auto}
+#tvolDb{font-family:var(--mono);font-size:19px;font-weight:bold}
+#tmute{width:100%}
+@media (min-width:901px){
+ body[data-tab="eq"] #tower{display:block;width:196px;flex:none;position:relative}
+ body[data-tab="eq"] #masterstrip{display:none}
+ body[data-tab="eq"] #strips{margin-right:208px}
+}
+</style>
 <script>
 const $=id=>document.getElementById(id);
 let S=null, tab='eq', sel=0, RT=new Array(31).fill(-60), RTs=new Array(31).fill(-60), snapA=null, snapB=null, abIsB=false;
@@ -1299,7 +1323,7 @@ function fill(){
   tgl('xfOn',S.xfOn);$('xfAmt').value=S.xfAmt;$('xfAmt_v').textContent=S.xfAmt.toFixed(2);
   tgl('mono',S.mono);tgl('dim',S.dim);
   $('volMax').value=S.volMax;$('volMax_v').textContent=Math.round(S.volMax*100)+'%';
-  $('vol').value=S.vol;$('volDb').textContent=volDb(S.vol)+' dB';
+  $('vol').value=S.vol;$('volDb').textContent=volDb(S.vol)+' dB';$('tvol').value=S.vol;$('tvolDb').textContent=volDb(S.vol)+' dB';tgl('tmute',S.mute);
   tgl('mute',S.mute);
   fillChips();fillEditor();fillStrips();fillSlots();draw();
 }
@@ -1308,7 +1332,7 @@ function bindTgl(id,key,after){$(id).onclick=()=>{S[key]=S[key]?0:1;tgl(id,S[key
 function bindNum(id,key,after){$(id).onchange=()=>{S[key]=+$(id).value;send({[key]:S[key]});if(after)after();draw();};}
 function bind(){
   document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>{
-    tab=b.dataset.tab;
+    tab=b.dataset.tab;document.body.dataset.tab=tab;
     document.querySelectorAll('.tabbtn').forEach(x=>x.classList.toggle('act',x==b));
     document.querySelectorAll('.pg').forEach(p=>p.classList.toggle('act',p.id=='pg-'+tab||(tab=='sys'&&p.id=='pg-sys')));
     draw();
@@ -1332,8 +1356,10 @@ function bind(){
   $('xfAmt').oninput=()=>{S.xfAmt=+$('xfAmt').value;$('xfAmt_v').textContent=S.xfAmt.toFixed(2);sendSoon({xfAmt:S.xfAmt});};
   bindTgl('mono','mono');bindTgl('dim','dim');
   $('volMax').oninput=()=>{S.volMax=+$('volMax').value;$('volMax_v').textContent=Math.round(S.volMax*100)+'%';sendSoon({volMax:S.volMax});};
-  $('vol').oninput=()=>{S.vol=+$('vol').value;$('volDb').textContent=volDb(S.vol)+' dB';sendSoon({vol:S.vol});draw();};
-  bindTgl('mute','mute');
+  $('vol').oninput=()=>{S.vol=+$('vol').value;$('volDb').textContent=volDb(S.vol)+' dB';$('tvol').value=S.vol;$('tvolDb').textContent=volDb(S.vol)+' dB';sendSoon({vol:S.vol});draw();};
+  $('tvol').oninput=()=>{S.vol=+$('tvol').value;$('tvolDb').textContent=volDb(S.vol)+' dB';$('vol').value=S.vol;$('volDb').textContent=volDb(S.vol)+' dB';sendSoon({vol:S.vol});draw();};
+  $('tmute').onclick=()=>$('mute').click();
+  bindTgl('mute','mute',()=>tgl('tmute',S.mute));
   // editor band
   $('ed_on').onclick=()=>{const b=S.bands[sel];b.on=!b.on;tgl('ed_on',b.on);send({['b'+sel+'_on']:b.on?1:0});fillChips();fillStrips();draw();};
   $('ed_t').onchange=()=>{const b=S.bands[sel];b.t=+$('ed_t').value;send({['b'+sel+'_t']:b.t});draw();};
@@ -1370,7 +1396,7 @@ function bind(){
 /* ---------- data ---------- */
 async function load(){try{S=await (await fetch('/api/state')).json();fill();}catch(e){}}
 setInterval(async()=>{try{const m=await (await fetch('/api/meter')).json();
-  $('mLf').style.height=Math.min(100,m.l*100)+'%';$('mRf').style.height=Math.min(100,m.r*100)+'%';$('mMf').style.height=Math.min(100,Math.max(m.l,m.r)*100)+'%';
+  $('mLf').style.height=Math.min(100,m.l*100)+'%';$('mRf').style.height=Math.min(100,m.r*100)+'%';$('mMf').style.height=Math.min(100,Math.max(m.l,m.r)*100)+'%';$('tLf').style.height=Math.min(100,m.l*100)+'%';$('tRf').style.height=Math.min(100,m.r*100)+'%';
   $('grbar').style.width=Math.min(100,-m.gr/24*100)+'%';$('gr_v').textContent=m.gr+' dB';$('clipct').textContent=m.clip;}catch(e){}},200);
 let rtBusy=false;
 setInterval(async()=>{if(rtBusy)return;rtBusy=true;try{const r=await (await fetch('/api/rta')).json();RT=r.rta;}catch(e){}rtBusy=false;},150);
@@ -1378,6 +1404,7 @@ setInterval(()=>{let moved=false;for(let i=0;i<31;i++){const d=RT[i]-RTs[i];if(M
 window.addEventListener('resize',()=>{fitCv();draw();});
 fitCv();bind();load();
 </script></body></html>
+
 )HTML";
 
 static void setupWeb() {
