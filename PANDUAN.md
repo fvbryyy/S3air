@@ -103,6 +103,7 @@ ceiling xfOn xfAmt width mono balance dlyL dlyR`, per band
 
 ## 8. Riwayat versi
 
+- **v4.3.1 S3 Air** - perbaikan posisi fader: rel & kap kini lurus di tengah strip (sebelumnya kap miring +21px ke kanan dari rel karena kap menengahi kotak input, bukan rel; diukur dari piksel screenshot alat user).
 - **v4.3 S3 Air** - tema warna SOFT di atas basis v4.1 (pilihan final user setelah rancangan VoiceMeeter oranye & arang ditolak): cyan dilembutkan (#63c7de), pendaran dikurangi, warna band pastel, pink menara dilembutkan; fader diganti kap mixer (rel slot gelap + kap grafit bergerigi bergaris penanda, master bergaris merah muda) dengan garis penanda tengah rel; PERBAIKAN BUG: spektrum RTA kini bergerak di semua tab bergrafik (sebelumnya cuma bergerak di tab EQ lalu beku di tab lain karena loop animasi cuma menggambar ulang pada tab EQ).
 - **v4.2 S3 Air** - fader master menara dipindah: meter L/R kini berkelompok di kiri, fader di kanan (tidak lagi di tengah VU, sesuai gambar rancangan); pengerasan stabilitas panel: tab Sistem menyegarkan data tiap 2 detik, panel memuat ulang data otomatis bila koneksi awal gagal, seret titik grafik anti-nyangkut (pointercancel), hitungan meter GR tidak bisa negatif, koordinat grafik aman dari pembagian nol.
 - **v4.1 S3 Air** - poles sesuai rancangan: navbar menjadi pil teks ramping (tab aktif = pil cyan menyala, ikon disembunyikan) dan menara master diselaraskan ke gambar rancangan (rel fader merah, meter L/R bersegmen ala LED); tata letak & fungsi sama persis dengan v4.0.

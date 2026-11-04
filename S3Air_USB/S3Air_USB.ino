@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v4.3 S3 Air"
+#define FW_VERSION "v4.3.1 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -1105,7 +1105,7 @@ input[type=range]{accent-color:#22d3ee}
 @media (max-width:900px){.tabbtn{padding:7px 13px;min-height:40px}}
 </style>
 <style>
-/* ===== S3 Air v4.3 - warna SOFT + kap fader mixer ===== */
+/* ===== S3 Air v4.3.1 - warna SOFT + kap fader mixer + fader lurus tengah ===== */
 :root{--teal:#63c7de;--teal2:#3d7e94;--org:#e79ec3}
 body{background:radial-gradient(1100px 420px at 50% -140px,rgba(99,199,222,.07),transparent 62%),#05070d}
 #logo b span{color:#63c7de;text-shadow:0 0 10px rgba(99,199,222,.35)}
@@ -1123,16 +1123,19 @@ input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;ba
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:24px;margin-top:-10px;border-radius:3px;border:1px solid #000;background:linear-gradient(90deg,transparent 40%,var(--capline) 40%,var(--capline) 60%,transparent 60%),linear-gradient(180deg,#43464e,#1a1b1f 55%,#2e3138);box-shadow:0 2px 6px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.20)}
 input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:#101114;border:1px solid #000}
 input[type=range]::-moz-range-thumb{width:15px;height:24px;border-radius:3px;border:1px solid #000;background:linear-gradient(90deg,transparent 40%,var(--capline) 40%,var(--capline) 60%,transparent 60%),linear-gradient(180deg,#43464e,#1a1b1f 55%,#2e3138)}
-input.vfader{height:auto;width:40px;transform:translateX(4.5px)}
+input.vfader{height:auto;width:9px;transform:translateX(4px)}
 input.vfader::-webkit-slider-runnable-track{width:9px;height:auto;background:linear-gradient(180deg,transparent 49.2%,rgba(230,240,250,.38) 49.2%,rgba(230,240,250,.38) 50.8%,transparent 50.8%),linear-gradient(90deg,#08090b,#191a1e 45%,#26282e 55%,#08090b);border:1px solid #000;border-radius:5px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05),inset 0 0 12px rgba(0,0,0,.8)}
-input.vfader::-webkit-slider-thumb{width:40px;height:21px;margin-top:0;border-radius:4px;background:linear-gradient(180deg,transparent 42%,var(--capline) 42%,var(--capline) 58%,transparent 58%),repeating-linear-gradient(90deg,transparent 0 7px,rgba(0,0,0,.30) 7px 8px),linear-gradient(180deg,#43464e,#1a1b1f 55%,#2e3138);box-shadow:0 3px 8px rgba(0,0,0,.65),inset 0 1px 0 rgba(255,255,255,.22)}
+input.vfader::-webkit-slider-thumb{width:40px;height:21px;margin-top:0;margin-left:-20px;border-radius:4px;background:linear-gradient(180deg,transparent 42%,var(--capline) 42%,var(--capline) 58%,transparent 58%),repeating-linear-gradient(90deg,transparent 0 7px,rgba(0,0,0,.30) 7px 8px),linear-gradient(180deg,#43464e,#1a1b1f 55%,#2e3138);box-shadow:0 3px 8px rgba(0,0,0,.65),inset 0 1px 0 rgba(255,255,255,.22)}
 input.vfader::-moz-range-track{width:9px;background:linear-gradient(180deg,transparent 49.2%,rgba(230,240,250,.38) 49.2%,rgba(230,240,250,.38) 50.8%,transparent 50.8%),#141519;border:1px solid #000;border-radius:5px}
-input.vfader::-moz-range-thumb{width:40px;height:21px;border-radius:4px;background:linear-gradient(180deg,transparent 42%,var(--capline) 42%,var(--capline) 58%,transparent 58%),linear-gradient(180deg,#43464e,#1a1b1f 55%,#2e3138)}
+input.vfader::-moz-range-thumb{width:40px;height:21px;margin-left:-20px;border-radius:4px;background:linear-gradient(180deg,transparent 42%,var(--capline) 42%,var(--capline) 58%,transparent 58%),linear-gradient(180deg,#43464e,#1a1b1f 55%,#2e3138)}
 .strip.gq input.vfader{width:30px}
 .strip.gq input.vfader::-webkit-slider-thumb{width:30px}
 .strip.gq input.vfader::-moz-range-thumb{width:30px}
 #tvol{--capline:#f08585;width:48px}
-#tvol::-webkit-slider-thumb{width:48px;height:24px}
+#tvol::-webkit-slider-thumb{width:48px;height:24px;transform:none}
+#tvol::-moz-range-thumb{width:48px;height:24px;transform:none}
+.strip.gq input.vfader::-webkit-slider-thumb{margin-left:-15px}
+.strip.gq input.vfader::-moz-range-thumb{margin-left:-15px}
 #tvol::-moz-range-thumb{width:48px;height:24px}
 #vol{--capline:#f08585}
 </style>
