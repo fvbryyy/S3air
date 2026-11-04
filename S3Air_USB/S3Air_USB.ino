@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v4.0 S3 Air"
+#define FW_VERSION "v4.1 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -1091,6 +1091,17 @@ input[type=range]{accent-color:#22d3ee}
  body[data-tab="eq"] #masterstrip{display:none}
  body[data-tab="eq"] #strips{margin-right:208px}
 }
+</style>
+<style>
+/* ===== S3 Air v4.1 - navbar pil + menara gaya rancangan ===== */
+#topbar{align-items:center}
+.tabbtn{flex-direction:row;min-width:0;min-height:38px;padding:7px 20px;border-radius:8px;font-size:13px;border:1px solid var(--line);background:var(--panel2)}
+.tabbtn svg{display:none}
+.tabbtn.act{background:#22d3ee;color:#04121a;border-color:#22d3ee;box-shadow:0 0 14px rgba(34,211,238,.45);font-weight:bold}
+#tvol{accent-color:#e5484d}
+.towM{flex:0 0 18px}
+.towM::after{content:'';position:absolute;inset:0;background:repeating-linear-gradient(180deg,transparent 0 7px,rgba(0,0,0,.55) 7px 9px);pointer-events:none}
+@media (max-width:900px){.tabbtn{padding:7px 13px;min-height:40px}}
 </style>
 <script>
 const $=id=>document.getElementById(id);

@@ -103,6 +103,7 @@ ceiling xfOn xfAmt width mono balance dlyL dlyR`, per band
 
 ## 8. Riwayat versi
 
+- **v4.1 S3 Air** - poles sesuai rancangan: navbar menjadi pil teks ramping (tab aktif = pil cyan menyala, ikon disembunyikan) dan menara master diselaraskan ke gambar rancangan (rel fader merah, meter L/R bersegmen ala LED); tata letak & fungsi sama persis dengan v4.0.
 - **v4.0 S3 Air** - tata letak baru MENARA MASTER / L3 (dipilih user dari 3 rancangan tata letak): strip MAIN keluar dari bank fader menjadi menara sendiri di kanan tab EQ (desktop) yang menjulang dua lantai - meter L/R sendiri, fader ekstra panjang, angka dB besar, tombol MUTE; display dan kotak editor menyatu jadi satu konsol; di tab lain dan di HP tampilannya seperti v3.9 (MAIN tetap di bank fader).
 - **v3.9 S3 Air** - tema tampilan baru BROADCAST NEON (dipilih user dari 3 rancangan; kerangka v3.8 tidak berubah): latar nyaris hitam kebiruan dengan pendaran cyan dari atas, panel kaca gelap garis #22344d, sudut lebih membulat (10-12px), aksen cyan elektrik #22d3ee + pink #f471b5, kurva EQ & spektrum RTA cyan (dulu oranye/biru), tombol aktif bercahaya, bank fader bertepi atas cyan menyala, strip MAIN berbingkai pink, slider mengikuti aksen sistem.
 - **v3.8 S3 Air** - bank fader menempel (fixed) di bawah layar dengan padding bawah agar tidak menutupi slot Preset; baris tab Main bisa membungkus sehingga pilihan slope HPF tidak kepotong; kotak Preset tinggi alami; input angka tab Main diperlebar.
