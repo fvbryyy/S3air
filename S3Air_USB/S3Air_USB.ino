@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.0.5 S3 Air"
+#define FW_VERSION "v5.0.6 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -713,6 +713,23 @@ static void onSpkData(void *data, uint16_t len) {
   ringOutR = r + (frames < (int)avail ? frames : (int)avail);
   if (dspTaskHandle && (ringInW - ringInR) >= 64) xTaskNotifyGive(dspTaskHandle);
   i2s.write((uint8_t *)data, len);
+}
+
+// Uji mandiri diagnostik (serial: dlmstest=1) — cabang DLMS pada blok sintetik tanpa USB.
+// Bila cabang ini penyebab crash, panic-nya tercetak lengkap di Serial0 (kabel COM).
+static void dlmsSelfTest() {
+  Serial0.println("[test] cabang DLMS: mulai (200 blok x 512 sampel, setelan tersimpan)");
+  bool wasOn = dlms.on;
+  dlms.on = true; dlmsTouched = true;
+  static int16_t tb[512 * 2];
+  for (int i = 0; i < 512; i++) {
+    float v = 0.5f * sinf(2.0f * PI * 440.0f * i / 48000.0f);
+    int16_t q = (int16_t)(v * 32767.0f);
+    tb[2 * i] = q; tb[2 * i + 1] = (int16_t)(q / 2);
+  }
+  for (int r = 0; r < 200; r++) processBlock(tb, 512);
+  dlms.on = wasOn;
+  Serial0.println("[test] cabang DLMS: SELESAI tanpa crash");
 }
 
 static void dspTask(void *arg) {
@@ -2033,6 +2050,7 @@ static bool serSetOne(const String &kv) {
     if (i < 0 || i >= NUM_GEQ) return false;
     params.geq[i] = constrain(v, -12.0f, 12.0f); coefDirty = true; return true;
   }
+  if (k == "dlmstest") { dlmsSelfTest(); return true; }
   if (dlmsSetKey(k, v, b)) return true;
 #define SK(nm, field, lo, hi) if (k == nm) { field = constrain(v, lo, hi); coefDirty = true; return true; }
 #define BK(nm, field) if (k == nm) { field = b; coefDirty = true; return true; }
