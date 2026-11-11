@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.0.6 S3 Air"
+#define FW_VERSION "v5.0.7 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -400,7 +400,7 @@ static void rebuildDlmsCoefs() {
     buildFilterSet(&dlmsCoef[c][0], false, smDlmsHpfF[c], h.tf, h.hpfOn);
     buildFilterSet(&dlmsCoef[c][4], true, smDlmsLpfF[c], h.tf, h.lpfOn);
     for (int j = 0; j < 3; j++) {
-      if (h.peqOn) coefBiquad(dlmsCoef[c][8 + j], BT_PEAKING, SAMPLE_RATE, DLMS_PEQ_F[j], smDlmsPeq[c][j], 1.0f);
+      if (h.peqOn && fabsf(smDlmsPeq[c][j]) > 0.05f) coefBiquad(dlmsCoef[c][8 + j], BT_PEAKING, SAMPLE_RATE, DLMS_PEQ_F[j], smDlmsPeq[c][j], 1.0f);
       else coefIdentity(dlmsCoef[c][8 + j]);
     }
     bDlmsHpfF[c] = smDlmsHpfF[c]; bDlmsLpfF[c] = smDlmsLpfF[c];
@@ -715,21 +715,37 @@ static void onSpkData(void *data, uint16_t len) {
   i2s.write((uint8_t *)data, len);
 }
 
-// Uji mandiri diagnostik (serial: dlmstest=1) — cabang DLMS pada blok sintetik tanpa USB.
-// Bila cabang ini penyebab crash, panic-nya tercetak lengkap di Serial0 (kabel COM).
+// Uji mandiri diagnostik (serial: dlmstest=1) — ukur waktu proses per fase sinyal.
+// Fase hening/meluruh memaksa state biquad ke rentang denormal: bila fase itu jauh
+// lebih lambat dari fase keras, itulah penyebab serak (FPU melambat pada denormal).
+static int16_t dlmsTb[512 * 2];
+static void dlmsFillSine(float amp) {
+  for (int i = 0; i < 512; i++) {
+    float v = amp * sinf(2.0f * PI * 440.0f * i / 48000.0f);
+    int16_t q = (int16_t)(v * 32767.0f);
+    dlmsTb[2 * i] = q; dlmsTb[2 * i + 1] = (int16_t)(q / 2);
+  }
+}
+static void dlmsRunPhase(const char *nm, int blocks) {
+  uint32_t t0 = micros();
+  for (int r = 0; r < blocks; r++) processBlock(dlmsTb, 512);
+  Serial0.printf("[test] %s: %lu us / %d blok\n", nm, (unsigned long)(micros() - t0), blocks);
+}
 static void dlmsSelfTest() {
-  Serial0.println("[test] cabang DLMS: mulai (200 blok x 512 sampel, setelan tersimpan)");
+  Serial0.println("[test] mulai: ukur waktu DLMS vs reguler (setelan tersimpan)");
   bool wasOn = dlms.on;
   dlms.on = true; dlmsTouched = true;
-  static int16_t tb[512 * 2];
-  for (int i = 0; i < 512; i++) {
-    float v = 0.5f * sinf(2.0f * PI * 440.0f * i / 48000.0f);
-    int16_t q = (int16_t)(v * 32767.0f);
-    tb[2 * i] = q; tb[2 * i + 1] = (int16_t)(q / 2);
-  }
-  for (int r = 0; r < 200; r++) processBlock(tb, 512);
+  dlmsFillSine(0.5f);  dlmsRunPhase("DLMS keras ", 100);
+  float amp = 0.5f;
+  uint32_t t0 = micros();
+  for (int r = 0; r < 100; r++) { dlmsFillSine(amp); processBlock(dlmsTb, 512); amp *= 0.85f; }
+  Serial0.printf("[test] DLMS luruh : %lu us / 100 blok\n", (unsigned long)(micros() - t0));
+  dlmsFillSine(0.0f);  dlmsRunPhase("DLMS hening", 200);
+  dlms.on = false;
+  dlmsFillSine(0.5f);  dlmsRunPhase("REG  keras ", 100);
+  dlmsFillSine(0.0f);  dlmsRunPhase("REG  hening", 200);
   dlms.on = wasOn;
-  Serial0.println("[test] cabang DLMS: SELESAI tanpa crash");
+  Serial0.println("[test] SELESAI");
 }
 
 static void dspTask(void *arg) {
