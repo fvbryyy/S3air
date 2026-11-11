@@ -84,3 +84,31 @@ struct BiquadState {
   float x1L, x2L, y1L, y2L;
   float x1R, x2R, y1R, y2R;
 };
+
+// ============================================================
+//  DLMS — manajemen speaker per kanal (mode terpisah dari rantai
+//  stereo reguler; aktif hanya bila DlmsParams.on)
+// ============================================================
+struct DlmsCh {
+  bool     on;          // kanal aktif
+  uint8_t  src;         // sumber: 0 = IN A, 1 = IN B, 2 = A+B
+  bool     hpfOn;
+  float    hpfF;        // 20..20000 Hz
+  bool     lpfOn;
+  float    lpfF;        // 20..20000 Hz
+  uint8_t  tf;          // tipe filter gabungan: 0 LR12, 1 LR24, 2 LR48, 3 BW12, 4 BW24, 5 BW48
+  bool     peqOn;
+  float    peq[3];      // gain dB @ 100 / 1k / 8k Hz, Q tetap 1.0, -12..+12
+  float    gainDb;      // -60..+12
+  float    dlyMs;       // 0..20 ms
+  float    limDb;       // ceiling limiter kanal, -24..0
+  bool     pol;         // balik fase 180°
+};
+
+struct DlmsParams {
+  bool  on;
+  bool  inOnA, inOnB;
+  float inGainA, inGainB;   // dB, -60..+12
+  float inDlyA, inDlyB;     // ms, 0..100 (penyelarasan sistem)
+  DlmsCh ch[2];             // 0 = L, 1 = R
+};

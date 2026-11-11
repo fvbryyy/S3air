@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v4.3.2 S3 Air"
+#define FW_VERSION "v5.0 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -74,6 +74,12 @@ static const float SMOOTH_COEF = 0.002f;
 // Delay line 20 ms = 960 sampel @48k, sediakan 1024
 static float dlyBufL[1024], dlyBufR[1024];
 static uint16_t dlyWr = 0;
+// DLMS: delay input maks 100 ms (4800 sampel) + penghalus khusus mode DLMS
+static float inDlyBufA[4800], inDlyBufB[4800];
+static uint16_t inDlyWr = 0;
+static float smInGainA = 1.0f, smInGainB = 1.0f;
+static float smChGain[2] = {1.0f, 1.0f}, smChCeil[2] = {1.0f, 1.0f};
+static float smChDly[2] = {0, 0}, smInDlyA = 0, smInDlyB = 0;
 // Tangkap sampel untuk RTA (mono mix, ring 1024)
 static float rtaBuf[1024];
 static uint16_t rtaWr = 0;
@@ -320,6 +326,140 @@ static void rebuildDynCoefs() {
     coefBiquad(dynCoef[i], BT_BANDPASS, SAMPLE_RATE, params.band[i].freq, 0, params.band[i].q);
 }
 
+// ============================================================
+//  DLMS — koefisien, keadaan & pengatur per kanal
+// ============================================================
+DlmsParams dlms;
+static BiquadCoef  dlmsCoef[2][11];   // 0-3 HPF, 4-7 LPF, 8-10 PEQ
+static BiquadState dlmsState[2][11];
+static const float DLMS_PEQ_F[3] = {100, 1000, 8000};
+static float smDlmsHpfF[2] = {2500, 2500}, smDlmsLpfF[2] = {2500, 2500};
+static float smDlmsPeq[2][3] = {};
+static float bDlmsHpfF[2] = {-1, -1}, bDlmsLpfF[2] = {-1, -1};
+static float bDlmsPeq[2][3] = {};
+static uint16_t bDlmsBits[2] = {0xFFFF, 0xFFFF};
+static volatile bool dlmsSaveDirty = false;
+
+static void setDlmsDefaults() {
+  memset(&dlms, 0, sizeof(dlms));
+  dlms.on = false;
+  dlms.inOnA = dlms.inOnB = true;
+  for (int c = 0; c < 2; c++) {
+    DlmsCh &h = dlms.ch[c];
+    h.on = true; h.src = (uint8_t)c;              // L <- IN A, R <- IN B
+    h.hpfF = 2500; h.lpfF = 2500; h.tf = 1;       // LR24
+    h.peqOn = true;
+    h.limDb = (c == 0) ? -3.0f : -1.0f;
+  }
+  dlms.ch[0].hpfOn = true;                        // contoh silang bawaan: L = HPF, R = LPF
+  dlms.ch[1].lpfOn = true;
+}
+
+static void coefHP2q(BiquadCoef &c, float fs, float f0, float q, bool on) {
+  if (!on) { coefIdentity(c); return; }
+  f0 = constrain(f0, 10.0f, fs * 0.49f);
+  float w = 2.0f * PI * f0 / fs, cw = cosf(w), sw = sinf(w);
+  float alpha = sw / (2.0f * q), a0 = 1 + alpha;
+  c.b0 = (1 + cw) * 0.5f / a0; c.b1 = -(1 + cw) / a0; c.b2 = c.b0;
+  c.a1 = -2 * cw / a0; c.a2 = (1 - alpha) / a0; c.bypass = false;
+}
+static void coefLP2q(BiquadCoef &c, float fs, float f0, float q, bool on) {
+  if (!on) { coefIdentity(c); return; }
+  f0 = constrain(f0, 10.0f, fs * 0.49f);
+  float w = 2.0f * PI * f0 / fs, cw = cosf(w), sw = sinf(w);
+  float alpha = sw / (2.0f * q), a0 = 1 + alpha;
+  c.b0 = (1 - cw) * 0.5f / a0; c.b1 = (1 - cw) / a0; c.b2 = c.b0;
+  c.a1 = -2 * cw / a0; c.a2 = (1 - alpha) / a0; c.bypass = false;
+}
+static void coefLP1(BiquadCoef &c, float fs, float f0, bool on) {
+  if (!on) { coefIdentity(c); return; }
+  float rc = 1.0f / (2.0f * PI * f0), dt = 1.0f / fs, a = dt / (rc + dt);
+  c.b0 = a; c.b1 = 0; c.b2 = 0; c.a1 = -(1.0f - a); c.a2 = 0; c.bypass = false;
+}
+
+// Isi 4 seksi biquad untuk satu filter (HP/LP) sesuai tipe gabungan tf
+static void buildFilterSet(BiquadCoef *dst, bool lowpass, float f, uint8_t tf, bool on) {
+  for (int i = 0; i < 4; i++) coefIdentity(dst[i]);
+  if (!on) return;
+  auto S2 = [&](int i, float q) { if (lowpass) coefLP2q(dst[i], SAMPLE_RATE, f, q, true); else coefHP2q(dst[i], SAMPLE_RATE, f, q, true); };
+  auto S1 = [&](int i) { if (lowpass) coefLP1(dst[i], SAMPLE_RATE, f, true); else coefHighpass1(dst[i], SAMPLE_RATE, f, true); };
+  switch (tf) {
+    case 0: S1(0); S1(1); break;                                                      // LR12
+    case 1: S2(0, 0.7071f); S2(1, 0.7071f); break;                                    // LR24
+    case 2: S2(0, 0.7071f); S2(1, 0.7071f); S2(2, 0.7071f); S2(3, 0.7071f); break;    // LR48
+    case 3: S2(0, 0.7071f); break;                                                    // BW12
+    case 4: S2(0, 0.5412f); S2(1, 1.3065f); break;                                    // BW24
+    default: S2(0, 0.3896f); S2(1, 0.6266f); S2(2, 1.1759f); S2(3, 2.5629f); break;   // BW48
+  }
+}
+
+static void rebuildDlmsCoefs() {
+  for (int c = 0; c < 2; c++) {
+    DlmsCh &h = dlms.ch[c];
+    buildFilterSet(&dlmsCoef[c][0], false, smDlmsHpfF[c], h.tf, h.hpfOn);
+    buildFilterSet(&dlmsCoef[c][4], true, smDlmsLpfF[c], h.tf, h.lpfOn);
+    for (int j = 0; j < 3; j++) {
+      if (h.peqOn) coefBiquad(dlmsCoef[c][8 + j], BT_PEAKING, SAMPLE_RATE, DLMS_PEQ_F[j], smDlmsPeq[c][j], 1.0f);
+      else coefIdentity(dlmsCoef[c][8 + j]);
+    }
+    bDlmsHpfF[c] = smDlmsHpfF[c]; bDlmsLpfF[c] = smDlmsLpfF[c];
+    for (int j = 0; j < 3; j++) bDlmsPeq[c][j] = smDlmsPeq[c][j];
+    bDlmsBits[c] = (uint16_t)((h.on ? 1 : 0) | (h.hpfOn ? 2 : 0) | (h.lpfOn ? 4 : 0) |
+                              (h.peqOn ? 8 : 0) | (h.src << 4) | (h.tf << 6));
+  }
+}
+static bool dlmsChanged() {
+  for (int c = 0; c < 2; c++) {
+    DlmsCh &h = dlms.ch[c];
+    uint16_t bits = (uint16_t)((h.on ? 1 : 0) | (h.hpfOn ? 2 : 0) | (h.lpfOn ? 4 : 0) |
+                               (h.peqOn ? 8 : 0) | (h.src << 4) | (h.tf << 6));
+    if (bits != bDlmsBits[c]) return true;
+    if (fabsf(bDlmsHpfF[c] - smDlmsHpfF[c]) > 0.01f * smDlmsHpfF[c] + 0.05f) return true;
+    if (fabsf(bDlmsLpfF[c] - smDlmsLpfF[c]) > 0.01f * smDlmsLpfF[c] + 0.05f) return true;
+    for (int j = 0; j < 3; j++) if (fabsf(bDlmsPeq[c][j] - smDlmsPeq[c][j]) > 0.03f) return true;
+  }
+  return false;
+}
+static void snapDlmsSmooth() {
+  for (int c = 0; c < 2; c++) {
+    smDlmsHpfF[c] = dlms.ch[c].hpfF; smDlmsLpfF[c] = dlms.ch[c].lpfF;
+    for (int j = 0; j < 3; j++) smDlmsPeq[c][j] = dlms.ch[c].peq[j];
+  }
+}
+
+// Satu kunci setelan DLMS (dipakai panel web & serial bersama)
+static bool dlmsSetKey(const String &k, float v, bool b) {
+  if (k == "dlmsOn") { dlms.on = b; dlmsSaveDirty = true; return true; }
+  if (k == "inOnA") { dlms.inOnA = b; dlmsSaveDirty = true; return true; }
+  if (k == "inOnB") { dlms.inOnB = b; dlmsSaveDirty = true; return true; }
+  if (k == "inGainA") { dlms.inGainA = constrain(v, -60.0f, 12.0f); dlmsSaveDirty = true; return true; }
+  if (k == "inGainB") { dlms.inGainB = constrain(v, -60.0f, 12.0f); dlmsSaveDirty = true; return true; }
+  if (k == "inDlyA") { dlms.inDlyA = constrain(v, 0.0f, 100.0f); dlmsSaveDirty = true; return true; }
+  if (k == "inDlyB") { dlms.inDlyB = constrain(v, 0.0f, 100.0f); dlmsSaveDirty = true; return true; }
+  if (k.length() >= 4 && k[0] == 'c' && (k[1] == '0' || k[1] == '1') && k[2] == '_') {
+    DlmsCh &h = dlms.ch[k[1] - '0'];
+    String f = k.substring(3);
+    if (f == "on") h.on = b;
+    else if (f == "src") h.src = (uint8_t)constrain((int)v, 0, 2);
+    else if (f == "hpfOn") { h.hpfOn = b; armDip = true; }
+    else if (f == "hpfF") h.hpfF = constrain(v, 20.0f, 20000.0f);
+    else if (f == "lpfOn") { h.lpfOn = b; armDip = true; }
+    else if (f == "lpfF") h.lpfF = constrain(v, 20.0f, 20000.0f);
+    else if (f == "tf") { h.tf = (uint8_t)constrain((int)v, 0, 5); armDip = true; }
+    else if (f == "peqOn") h.peqOn = b;
+    else if (f == "p0") h.peq[0] = constrain(v, -12.0f, 12.0f);
+    else if (f == "p1") h.peq[1] = constrain(v, -12.0f, 12.0f);
+    else if (f == "p2") h.peq[2] = constrain(v, -12.0f, 12.0f);
+    else if (f == "gain") h.gainDb = constrain(v, -60.0f, 12.0f);
+    else if (f == "dly") h.dlyMs = constrain(v, 0.0f, 20.0f);
+    else if (f == "lim") h.limDb = constrain(v, -24.0f, 0.0f);
+    else if (f == "pol") h.pol = b;
+    else return false;
+    dlmsSaveDirty = true; return true;
+  }
+  return false;
+}
+
 
 // ============================================================
 //  RTOS: ring SPSC — callback USB ringan, DSP di task khusus Core 1
@@ -391,6 +531,16 @@ static void processBlock(int16_t *s, int frames) {
     smCompThrDb += (targetCompThrDb - smCompThrDb) * SMOOTH_COEF;
     smCompRatio += (targetCompRatio - smCompRatio) * SMOOTH_COEF;
     smMakeup += (targetMakeup - smMakeup) * SMOOTH_COEF;
+    smInGainA += ((dlms.inOnA ? db2lin(dlms.inGainA) : 0.0f) - smInGainA) * SMOOTH_COEF;
+    smInGainB += ((dlms.inOnB ? db2lin(dlms.inGainB) : 0.0f) - smInGainB) * SMOOTH_COEF;
+    smInDlyA += (dlms.inDlyA - smInDlyA) * SMOOTH_COEF;
+    smInDlyB += (dlms.inDlyB - smInDlyB) * SMOOTH_COEF;
+    for (int c = 0; c < 2; c++) {
+      DlmsCh &hc = dlms.ch[c];
+      smChGain[c] += ((hc.on ? db2lin(hc.gainDb) * (hc.pol ? -1.0f : 1.0f) : 0.0f) - smChGain[c]) * SMOOTH_COEF;
+      smChCeil[c] += (db2lin(hc.limDb) - smChCeil[c]) * SMOOTH_COEF;
+      smChDly[c] += (hc.dlyMs - smChDly[c]) * SMOOTH_COEF;
+    }
     // laju kontrol (tiap 48 sampel): luncurkan frekuensi/Q/HPF secara rasio, bangun ulang bila berubah
     if (++ctrlCount >= 48) {
       ctrlCount = 0;
@@ -399,6 +549,12 @@ static void processBlock(int16_t *s, int frames) {
         smBandQ[i] += (params.band[i].q - smBandQ[i]) * 0.09f;
       }
       smHpfFreq *= 1.0f + 0.09f * (params.hpfFreq / smHpfFreq - 1.0f);
+      for (int c = 0; c < 2; c++) {
+        smDlmsHpfF[c] *= 1.0f + 0.09f * (dlms.ch[c].hpfF / smDlmsHpfF[c] - 1.0f);
+        smDlmsLpfF[c] *= 1.0f + 0.09f * (dlms.ch[c].lpfF / smDlmsLpfF[c] - 1.0f);
+        for (int j = 0; j < 3; j++) smDlmsPeq[c][j] += (dlms.ch[c].peq[j] - smDlmsPeq[c][j]) * 0.09f;
+      }
+      if (dlmsChanged()) rebuildDlmsCoefs();
       if (filtersChanged()) {
         rebuildCoefficients();
         mb = mainBank[activeBank]; gb = geqBank[activeBank];
@@ -407,6 +563,35 @@ static void processBlock(int16_t *s, int frames) {
     }
 
     float L = s[2 * n] * (1.0f / 32768.0f), R = s[2 * n + 1] * (1.0f / 32768.0f);
+    if (dlms.on) {
+      // --- jalur DLMS: input -> routing -> filter per kanal -> limiter kanal -> master ---
+      grMeterDb = 0;
+      float a = L * smInGainA, b = R * smInGainB;
+      inDlyBufA[inDlyWr] = a; inDlyBufB[inDlyWr] = b;
+      uint16_t dA = (uint16_t)(smInDlyA * 48.0f), dB = (uint16_t)(smInDlyB * 48.0f);
+      a = inDlyBufA[(inDlyWr + 4800 - dA) % 4800];
+      b = inDlyBufB[(inDlyWr + 4800 - dB) % 4800];
+      inDlyWr = (inDlyWr + 1) % 4800;
+      float xs[2];
+      for (int c = 0; c < 2; c++) {
+        DlmsCh &h = dlms.ch[c];
+        float x = h.src == 0 ? a : (h.src == 1 ? b : (a + b) * 0.5f);
+        for (int i = 0; i < 11; i++) x = runBiquad(dlmsCoef[c][i], dlmsState[c][i], x, true);
+        xs[c] = x * smChGain[c];
+      }
+      uint16_t dd0 = (uint16_t)(smChDly[0] * 48.0f), dd1 = (uint16_t)(smChDly[1] * 48.0f);
+      dlyBufL[dlyWr] = xs[0]; dlyBufR[dlyWr] = xs[1];
+      L = dlyBufL[(dlyWr - dd0) & 1023]; R = dlyBufR[(dlyWr - dd1) & 1023];
+      dlyWr = (dlyWr + 1) & 1023;
+      L = smChCeil[0] * tanhf(L / (smChCeil[0] + 1e-9f));
+      R = smChCeil[1] * tanhf(R / (smChCeil[1] + 1e-9f));
+      if (xfadeRemain > 0) {
+        float fade = (float)xfadeRemain / (float)XFADE_LEN;
+        L *= (1.0f - fade); R *= (1.0f - fade);
+        xfadeRemain--;
+      }
+      L *= smoothVol; R *= smoothVol;
+    } else {
     L *= smoothPreamp * smoothTrimL; R *= smoothPreamp * smoothTrimR;
 
     if (params.eqMode == 0) {
@@ -474,6 +659,7 @@ static void processBlock(int16_t *s, int frames) {
       L = smoothCeil * tanhf(L / (smoothCeil + 1e-9f));
       R = smoothCeil * tanhf(R / (smoothCeil + 1e-9f));
     }
+    } // akhir cabang reguler
 
     float aL = fabsf(L), aR = fabsf(R);
     if (aL > meterPeakL) meterPeakL = aL;
@@ -614,8 +800,10 @@ Preferences prefs;
 static bool saveUserPreset(int slot) {
   if (slot < 0 || slot >= NUM_USER_PRESETS) return false;
   char key[8]; snprintf(key, sizeof(key), "u%d", slot);
+  char dkey[8]; snprintf(dkey, sizeof(dkey), "d%d", slot);
   prefs.begin("mbahdac2", false);
   size_t w = prefs.putBytes(key, &params, sizeof(params));
+  prefs.putBytes(dkey, &dlms, sizeof(dlms));
   prefs.end();
   return w == sizeof(params);
 }
@@ -628,7 +816,26 @@ static bool loadUserPreset(int slot) {
   prefs.end();
   if (r != sizeof(tmp)) return false;
   params = tmp; coefDirty = true; rebuildDynCoefs();
+  char dkey[8]; snprintf(dkey, sizeof(dkey), "d%d", slot);
+  prefs.begin("mbahdac2", true);
+  DlmsParams dtmp;
+  size_t dr = prefs.getBytes(dkey, &dtmp, sizeof(dtmp));
+  prefs.end();
+  if (dr == sizeof(dtmp)) { dlms = dtmp; snapDlmsSmooth(); rebuildDlmsCoefs(); }
   return true;
+}
+
+static void saveDlmsNvs() {
+  prefs.begin("mbahdac2", false);
+  prefs.putBytes("dlms", &dlms, sizeof(dlms));
+  prefs.end();
+}
+static void loadDlmsNvs() {
+  prefs.begin("mbahdac2", true);
+  DlmsParams tmp;
+  size_t r = prefs.getBytes("dlms", &tmp, sizeof(tmp));
+  prefs.end();
+  if (r == sizeof(tmp)) dlms = tmp;
 }
 static bool userPresetExists(int slot) {
   char key[8]; snprintf(key, sizeof(key), "u%d", slot);
@@ -676,6 +883,27 @@ static void wifiPoll() {
 // ============================================================
 //  API web
 // ============================================================
+static String dlmsJson() {
+  String j = ",\"dlms\":{\"on\":" + String(dlms.on ? 1 : 0);
+  j += ",\"inOnA\":" + String(dlms.inOnA ? 1 : 0) + ",\"inOnB\":" + String(dlms.inOnB ? 1 : 0);
+  j += ",\"inGainA\":" + String(dlms.inGainA, 1) + ",\"inGainB\":" + String(dlms.inGainB, 1);
+  j += ",\"inDlyA\":" + String(dlms.inDlyA, 1) + ",\"inDlyB\":" + String(dlms.inDlyB, 1);
+  j += ",\"ch\":[";
+  for (int c = 0; c < 2; c++) {
+    DlmsCh &h = dlms.ch[c];
+    if (c) j += ",";
+    j += "{\"on\":" + String(h.on ? 1 : 0) + ",\"src\":" + String(h.src) +
+         ",\"hpfOn\":" + String(h.hpfOn ? 1 : 0) + ",\"hpfF\":" + String(h.hpfF, 0) +
+         ",\"lpfOn\":" + String(h.lpfOn ? 1 : 0) + ",\"lpfF\":" + String(h.lpfF, 0) +
+         ",\"tf\":" + String(h.tf) + ",\"peqOn\":" + String(h.peqOn ? 1 : 0) +
+         ",\"peq\":[" + String(h.peq[0], 1) + "," + String(h.peq[1], 1) + "," + String(h.peq[2], 1) + "]" +
+         ",\"gain\":" + String(h.gainDb, 1) + ",\"dly\":" + String(h.dlyMs, 1) +
+         ",\"lim\":" + String(h.limDb, 1) + ",\"pol\":" + String(h.pol ? 1 : 0) + "}";
+  }
+  j += "]}";
+  return j;
+}
+
 static String stateJson() {
   String j = "{";
   j += "\"fw\":\"" FW_VERSION "\",\"net\":\"" + String(wifiOn && WiFi.status() == WL_CONNECTED ? ("WiFi: " + WiFi.localIP().toString()) : "WiFi: Menghubungkan...") + "\"";
@@ -711,6 +939,7 @@ static String stateJson() {
        ",\"dim\":" + String(params.dim ? 1 : 0) + ",\"bypass\":" + String(params.bypass ? 1 : 0);
   j += ",\"volMax\":" + String(params.volMax, 2) + ",\"autoHr\":" + String(params.autoHeadroom ? 1 : 0);
   j += ",\"eqPeak\":" + String(estimateEqPeakDb(), 1);
+  j += dlmsJson();
   j += ",\"slots\":[";
   for (int i = 0; i < NUM_USER_PRESETS; i++) { if (i) j += ","; j += String(userPresetExists(i) ? 1 : 0); }
   j += "]}";
@@ -953,6 +1182,7 @@ input[type=range]{accent-color:#22d3ee}
   <button class="tabbtn" data-tab="main"><svg viewBox="0 0 24 24"><path d="M4 6 h16 M4 12 h16 M4 18 h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/></svg>Main</button>
   <button class="tabbtn" data-tab="preset"><svg viewBox="0 0 24 24"><path d="M4 4 h13 l3 3 v13 H4 z"/><path d="M7 4 v5 h9 V4 M7 20 v-6 h10 v6"/></svg>Preset</button>
   <button class="tabbtn" data-tab="sys"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2 v4 M12 18 v4 M2 12 h4 M18 12 h4"/></svg>Sistem</button>
+  <button class="tabbtn" data-tab="dlms"><svg viewBox="0 0 24 24"><path d="M4 20 V10 M12 20 V4 M20 20 V13"/></svg>DLMS</button>
   <div id="topright"><span id="netpill">WiFi: ...</span><span id="cliplamp">CLIP <b id="clipct">0</b></span></div>
 </div>
 
@@ -1051,6 +1281,43 @@ input[type=range]{accent-color:#22d3ee}
         </div>
         <p class="note" style="margin-top:6px">Panel ini juga bisa dikendalikan lewat port COM (Serial Monitor 115200): <i>set vol=0.8</i>, <i>set b0_g=3</i>, <i>preset Bass</i>, <i>state</i>.</p>
       </section>
+<section class="pg" id="pg-dlms">
+        <div class="mrow" style="justify-content:flex-start;gap:6px;margin-bottom:8px">
+          <button class="tgl" id="dlmsOn">ON</button><span class="note">Mode DLMS — rantai reguler dilewati, master volume tetap jalan.</span>
+        </div>
+        <div class="dlmsbody">
+        <div class="boxes">
+          <div class="box"><h5>INPUT A (KIRI)</h5><div class="row"><button class="tgl" id="inOnA">ON</button><small>Gain</small><input type="range" id="inGainA" min="-60" max="12" step="0.5" style="width:90px"><output id="inGainAV">0.0 dB</output><small>Delay</small><input type="number" id="inDlyA" min="0" max="100" step="0.5" style="width:56px"><small>ms</small></div></div>
+          <div class="box"><h5>INPUT B (KANAN)</h5><div class="row"><button class="tgl" id="inOnB">ON</button><small>Gain</small><input type="range" id="inGainB" min="-60" max="12" step="0.5" style="width:90px"><output id="inGainBV">0.0 dB</output><small>Delay</small><input type="number" id="inDlyB" min="0" max="100" step="0.5" style="width:56px"><small>ms</small></div></div>
+        </div>
+        <div class="dlmsgrid">
+    <div class="box dch" id="dch0">
+      <h5><span style="color:#6fcf97;font-size:14px">L</span><button class="tgl" id="d0_on" style="float:right">ON</button></h5>
+      <div class="drow"><label>SUMBER</label><button class="tgl srcbtn">IN A</button><button class="tgl srcbtn">IN B</button><button class="tgl srcbtn">A+B</button></div>
+      <div class="drow"><label>HPF</label><button class="tgl" id="d0_hpfOn">ON</button><input type="range" id="d0_hpfF" min="0" max="1000" value="700"><span class="val" id="d0_hpfV">2.5 kHz</span></div>
+      <div class="drow"><label>LPF</label><button class="tgl" id="d0_lpfOn">ON</button><input type="range" id="d0_lpfF" min="0" max="1000" value="700"><span class="val" id="d0_lpfV">2.5 kHz</span></div>
+      <div class="drow"><label>TIPE</label><select class="dtf" id="d0_tf"><option value="0">LR12</option><option value="1" selected>LR24</option><option value="2">LR48</option><option value="3">BW12</option><option value="4">BW24</option><option value="5">BW48</option></select></div>
+      <div class="drow"><label>PEQ</label><button class="tgl" id="d0_peqOn">ON</button><div class="peq3"><div class="pq"><input type="range" id="d0_p0" min="-12" max="12" step="0.5" value="0"><span id="d0_p0v">100 · 0.0</span></div><div class="pq"><input type="range" id="d0_p1" min="-12" max="12" step="0.5" value="0"><span id="d0_p1v">1000 · 0.0</span></div><div class="pq"><input type="range" id="d0_p2" min="-12" max="12" step="0.5" value="0"><span id="d0_p2v">8000 · 0.0</span></div></div></div>
+      <div class="drow"><label>GAIN</label><input type="range" id="d0_gain" min="-60" max="12" step="0.5" value="0"><span class="val" id="d0_gainV">0.0 dB</span></div>
+      <div class="drow"><label>DELAY</label><input type="range" id="d0_dly" min="0" max="20" step="0.1" value="0"><span class="val" id="d0_dlyV">0.0 ms</span></div>
+      <div class="drow"><label>LIMITER</label><input type="range" id="d0_lim" min="-24" max="0" step="0.5" value="-3"><span class="val" id="d0_limV">-3.0 dB</span></div>
+      <div class="drow"><label>FASE</label><button class="tgl" id="d0_pol">0°</button></div>
+    </div>
+    <div class="box dch" id="dch1">
+      <h5><span style="color:#e58f8f;font-size:14px">R</span><button class="tgl" id="d1_on" style="float:right">ON</button></h5>
+      <div class="drow"><label>SUMBER</label><button class="tgl srcbtn">IN A</button><button class="tgl srcbtn">IN B</button><button class="tgl srcbtn">A+B</button></div>
+      <div class="drow"><label>HPF</label><button class="tgl" id="d1_hpfOn">ON</button><input type="range" id="d1_hpfF" min="0" max="1000" value="700"><span class="val" id="d1_hpfV">2.5 kHz</span></div>
+      <div class="drow"><label>LPF</label><button class="tgl" id="d1_lpfOn">ON</button><input type="range" id="d1_lpfF" min="0" max="1000" value="700"><span class="val" id="d1_lpfV">2.5 kHz</span></div>
+      <div class="drow"><label>TIPE</label><select class="dtf" id="d1_tf"><option value="0">LR12</option><option value="1" selected>LR24</option><option value="2">LR48</option><option value="3">BW12</option><option value="4">BW24</option><option value="5">BW48</option></select></div>
+      <div class="drow"><label>PEQ</label><button class="tgl" id="d1_peqOn">ON</button><div class="peq3"><div class="pq"><input type="range" id="d1_p0" min="-12" max="12" step="0.5" value="0"><span id="d1_p0v">100 · 0.0</span></div><div class="pq"><input type="range" id="d1_p1" min="-12" max="12" step="0.5" value="0"><span id="d1_p1v">1000 · 0.0</span></div><div class="pq"><input type="range" id="d1_p2" min="-12" max="12" step="0.5" value="0"><span id="d1_p2v">8000 · 0.0</span></div></div></div>
+      <div class="drow"><label>GAIN</label><input type="range" id="d1_gain" min="-60" max="12" step="0.5" value="0"><span class="val" id="d1_gainV">0.0 dB</span></div>
+      <div class="drow"><label>DELAY</label><input type="range" id="d1_dly" min="0" max="20" step="0.1" value="0"><span class="val" id="d1_dlyV">0.0 ms</span></div>
+      <div class="drow"><label>LIMITER</label><input type="range" id="d1_lim" min="-24" max="0" step="0.5" value="-1"><span class="val" id="d1_limV">-1.0 dB</span></div>
+      <div class="drow"><label>FASE</label><button class="tgl" id="d1_pol">0°</button></div>
+    </div>
+        </div>
+        </div>
+      </section>
     </div><aside id="tower"><div class="towIn">
       <div class="tscrib">MAIN LR</div>
       <div class="towMid"><div class="towMeters"><div class="mcol towM"><div class="mfill" id="tLf"></div></div><div class="mcol towM"><div class="mfill" id="tRf"></div></div></div><input type="range" class="vfader" id="tvol" min="0" max="1" step="0.01" value="0.75"></div>
@@ -1140,6 +1407,37 @@ input.vfader::-moz-range-thumb{width:40px;height:21px;margin-left:-20px;border-r
 #vol{--capline:#f08585}
 </style>
 
+<style>
+/* ===== S3 Air v5.0 - tema SOFT HIJAU ala VoiceMeeter + tab DLMS ===== */
+:root{--teal:#6fcf97;--teal2:#3e7d5a;--org:#e58f8f}
+body{background:radial-gradient(1100px 420px at 50% -140px,rgba(111,207,151,.08),transparent 62%),#05070d}
+#logo b span{color:#6fcf97;text-shadow:0 0 10px rgba(111,207,151,.35)}
+#dispwrap{box-shadow:inset 0 0 46px rgba(111,207,151,.03)}
+.tabbtn.act{background:#6fcf97;border-color:#6fcf97;box-shadow:0 0 10px rgba(111,207,151,.25)}
+.tgl.on{background:#6fcf97;border-color:#6fcf97;box-shadow:0 0 10px rgba(111,207,151,.25)}
+.chip.sel{outline-color:#6fcf97}
+input[type=range]{accent-color:#6fcf97;--capline:#6fcf97}
+#faderbank{border-top-color:#6fcf97;box-shadow:0 -4px 18px rgba(111,207,151,.12)}
+#masterstrip{border-color:#e58f8f;box-shadow:0 0 12px rgba(229,143,143,.16)}
+.towIn{border-color:#e58f8f;box-shadow:0 0 12px rgba(229,143,143,.16)}
+body[data-tab="dlms"] #strips{display:none!important}
+/* --- halaman DLMS --- */
+#pg-dlms.dlmsoff .dlmsbody{opacity:.38;pointer-events:none}
+.dlmsgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
+@media (max-width:900px){.dlmsgrid{grid-template-columns:1fr}}
+.dch{transition:opacity .2s}
+.dch.off{opacity:.5}
+.drow{display:flex;align-items:center;gap:8px;margin:8px 0}
+.drow label{width:62px;flex:none;color:var(--dim);font-size:11px;letter-spacing:1.2px}
+.drow .val{width:78px;flex:none;text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
+.drow input[type=range]{flex:1;min-width:0}
+.drow .tgl{flex:none}
+select.dtf{background:#0a0f18;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13px;flex:1;min-width:0}
+.peq3{display:flex;gap:10px;flex:1;min-width:0}
+.peq3 .pq{flex:1;text-align:center;min-width:0}
+.peq3 .pq input{width:100%}
+.peq3 .pq span{display:block;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+</style>
 <script>
 const $=id=>document.getElementById(id);
 let S=null, tab='eq', sel=0, RT=new Array(31).fill(-60), RTs=new Array(31).fill(-60), snapA=null, snapB=null, abIsB=false;
@@ -1204,9 +1502,10 @@ function draw(){
   const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
   ctx.fillStyle='#04070d';ctx.fillRect(0,0,W,H);
   if(tab=='gate'||tab=='comp')return drawDyn(W,H);
+  if(tab=='dlms')return drawDlms(W,H);
   // RTA
   const bw=W/31;
-  ctx.fillStyle='rgba(99,199,222,0.45)';
+  ctx.fillStyle='rgba(111,207,151,0.45)';
   for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(i*bw+1,H-v*H,bw-2,v*H);}
   // grid
   ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
@@ -1215,8 +1514,8 @@ function draw(){
   // kurva total
   const N=140;ctx.beginPath();
   for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,totalDb(f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}
-  ctx.strokeStyle='#63c7de';ctx.lineWidth=2.2;ctx.stroke();
-  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle='rgba(99,199,222,0.12)';ctx.fill();
+  ctx.strokeStyle='#6fcf97';ctx.lineWidth=2.2;ctx.stroke();
+  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle='rgba(111,207,151,0.12)';ctx.fill();
   // kurva band terpilih
   if(S.eqMode==0){const b=S.bands[sel];if(b.on){ctx.beginPath();for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,respDb(coef(b.t,b.f,b.g,b.q),f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.strokeStyle=BCOL[sel];ctx.lineWidth=1.2;ctx.stroke();}}
   // titik node
@@ -1227,14 +1526,14 @@ function draw(){
       ctx.fillStyle='#0a0a0a';ctx.font='bold 11px Arial';ctx.textAlign='center';ctx.fillText(i+1,x,y+4);ctx.textAlign='left';}
   }else{
     for(let i=0;i<31;i++){const x=xFor(GEQF[i],W),y=yFor(S.geq[i],H);
-      ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fillStyle='#63c7de';ctx.fill();ctx.strokeStyle='#111';ctx.stroke();}
+      ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fillStyle='#6fcf97';ctx.fill();ctx.strokeStyle='#111';ctx.stroke();}
   }
 }
 function drawDyn(W,H){
   const x0=40,x1=W-8,y0=8,y1=H-22;
   const X=v=>x0+(v+60)/60*(x1-x0), Y=v=>y0+(1-(v+60)/60)*(y1-y0);
   // RTA di belakang kurva transfer — spektrum tetap aktif di tab Gate/Comp
-  const bw=(x1-x0)/31;ctx.fillStyle='rgba(99,199,222,0.45)';
+  const bw=(x1-x0)/31;ctx.fillStyle='rgba(111,207,151,0.45)';
   for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(x0+i*bw+1,y1-v*(y1-y0),bw-2,v*(y1-y0));}
   ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.font='10px Arial';
   for(let v=-50;v<0;v+=10){ctx.beginPath();ctx.moveTo(X(v),y0);ctx.lineTo(X(v),y1);ctx.stroke();ctx.beginPath();ctx.moveTo(x0,Y(v));ctx.lineTo(x1,Y(v));ctx.stroke();ctx.fillText(v,X(v)-4,y1+12);ctx.fillText(v,6,Y(v)+3);}
@@ -1244,8 +1543,111 @@ function drawDyn(W,H){
     if(tab=='gate'){out=!S.gateOn?inn:(inn>S.gateThr?inn:-60);}
     else{out=inn;if(S.compOn&&inn>S.compThr)out=S.compThr+(inn-S.compThr)/Math.max(S.compRatio,1);out+=S.compOn?S.compMake:0;if(S.limiter)out=Math.min(out,S.ceiling);}
     out=Math.max(-60,Math.min(3,out));const px=X(inn),py=Y(out);i?ctx.lineTo(px,py):ctx.moveTo(px,py);}
-  ctx.strokeStyle='#63c7de';ctx.lineWidth=2.2;ctx.stroke();
+  ctx.strokeStyle='#6fcf97';ctx.lineWidth=2.2;ctx.stroke();
   if(tab=='comp'&&S.limiter){ctx.strokeStyle='#e03131';ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(x0,Y(S.ceiling));ctx.lineTo(x1,Y(S.ceiling));ctx.stroke();ctx.setLineDash([]);}
+}
+
+/* ---------- DLMS ---------- */
+const DPEQF=[100,1000,8000];
+const DCOL=['#6fcf97','#e58f8f'];
+function f2sl(f){return Math.round(Math.log10(Math.min(Math.max(f,20),20000)/20)/3*1000);}
+function sl2f(v){return 20*Math.pow(1000,v/1000);}
+function fmtHz(f){f=Math.round(f);return f>=1000?(f/1000).toFixed(2).replace(/\.?0+$/,'')+' kHz':f+' Hz';}
+function bq2(kind,f0,q){
+  f0=Math.min(Math.max(f0,10),FS*0.49);
+  const w=2*Math.PI*f0/FS,cw=Math.cos(w),sw=Math.sin(w),al=sw/(2*q),a0=1+al;
+  if(kind=='hp')return{b0:(1+cw)/2/a0,b1:-(1+cw)/a0,b2:(1+cw)/2/a0,a1:-2*cw/a0,a2:(1-al)/a0};
+  return{b0:(1-cw)/2/a0,b1:(1-cw)/a0,b2:(1-cw)/2/a0,a1:-2*cw/a0,a2:(1-al)/a0};
+}
+function bq1(kind,f0){
+  const rc=1/(2*Math.PI*f0),dt=1/FS;
+  if(kind=='hp'){const a=rc/(rc+dt);return{b0:a,b1:-a,b2:0,a1:-a,a2:0};}
+  const a=dt/(rc+dt);return{b0:a,b1:0,b2:0,a1:-(1-a),a2:0};
+}
+function filtDb(kind,f0,tf,f){
+  let d=0;const S2=q=>{d+=respDb(bq2(kind,f0,q),f);},S1=()=>{d+=respDb(bq1(kind,f0),f);};
+  if(tf==0){S1();S1();}else if(tf==1){S2(0.7071);S2(0.7071);}
+  else if(tf==2){S2(0.7071);S2(0.7071);S2(0.7071);S2(0.7071);}
+  else if(tf==3){S2(0.7071);}else if(tf==4){S2(0.5412);S2(1.3065);}
+  else{S2(0.3896);S2(0.6266);S2(1.1759);S2(2.5629);}
+  return d;
+}
+function dlmsDb(ch,f){
+  const D=S.dlms;if(!D||!D.on)return 0;
+  let d=ch.gain;
+  if(ch.hpfOn)d+=filtDb('hp',ch.hpfF,ch.tf,f);
+  if(ch.lpfOn)d+=filtDb('lp',ch.lpfF,ch.tf,f);
+  if(ch.peqOn)for(let j=0;j<3;j++)d+=respDb(coef(0,DPEQF[j],ch.peq[j],1.0),f);
+  return d;
+}
+function drawDlms(W,H){
+  const bw=W/31;ctx.fillStyle='rgba(111,207,151,0.45)';
+  for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(i*bw+1,H-v*H,bw-2,v*H);}
+  ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
+  [20,50,100,200,500,1000,2000,5000,10000,20000].forEach(f=>{const x=xFor(f,W);ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();ctx.fillText(fmtF(f),x+2,H-4);});
+  [12,6,0,-6,-12].forEach(db=>{const y=yFor(db,H);ctx.strokeStyle=db==0?'#27435f':'#182635';ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.fillStyle='#5f7d99';ctx.fillText((db>0?'+':'')+db,3,y-3);});
+  if(!S.dlms)return;
+  [1,0].forEach(c=>{
+    const ch=S.dlms.ch[c];if(!ch)return;
+    const N=140;ctx.beginPath();
+    for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,dlmsDb(ch,f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}
+    if(S.dlms.on&&ch.on){ctx.strokeStyle=DCOL[c];ctx.lineWidth=2.2;ctx.stroke();
+      ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle=DCOL[c]+'22';ctx.fill();}
+    else{ctx.strokeStyle='rgba(132,148,173,.55)';ctx.lineWidth=1.6;ctx.setLineDash([5,4]);ctx.stroke();ctx.setLineDash([]);}
+  });
+  ctx.font='bold 12px Arial';ctx.fillStyle=DCOL[0];ctx.fillText('L',6,16);
+  ctx.fillStyle=DCOL[1];ctx.textAlign='right';ctx.fillText('R',W-6,16);ctx.textAlign='left';
+}
+function tgTxt(id,on){tgl(id,on);$(id).textContent=on?'ON':'OFF';}
+function fillDlms(){
+  const D=S.dlms;if(!D)return;
+  tgTxt('dlmsOn',D.on);$('pg-dlms').classList.toggle('dlmsoff',!D.on);
+  tgTxt('inOnA',D.inOnA);tgTxt('inOnB',D.inOnB);
+  $('inGainA').value=D.inGainA;$('inGainAV').textContent=(+D.inGainA).toFixed(1)+' dB';
+  $('inGainB').value=D.inGainB;$('inGainBV').textContent=(+D.inGainB).toFixed(1)+' dB';
+  $('inDlyA').value=D.inDlyA;$('inDlyB').value=D.inDlyB;
+  for(let c=0;c<2;c++){
+    const ch=D.ch[c];if(!ch)continue;
+    $('dch'+c).classList.toggle('off',!ch.on);
+    tgTxt('d'+c+'_on',ch.on);
+    $('dch'+c).querySelectorAll('.srcbtn').forEach((b,i)=>b.classList.toggle('on',ch.src==i));
+    tgTxt('d'+c+'_hpfOn',ch.hpfOn);tgTxt('d'+c+'_lpfOn',ch.lpfOn);tgTxt('d'+c+'_peqOn',ch.peqOn);
+    const hs=$('d'+c+'_hpfF'),ls=$('d'+c+'_lpfF');
+    hs.value=f2sl(ch.hpfF);ls.value=f2sl(ch.lpfF);hs.disabled=!ch.hpfOn;ls.disabled=!ch.lpfOn;
+    $('d'+c+'_hpfV').textContent=fmtHz(ch.hpfF);$('d'+c+'_lpfV').textContent=fmtHz(ch.lpfF);
+    $('d'+c+'_tf').value=ch.tf;
+    for(let j=0;j<3;j++){const s=$('d'+c+'_p'+j);s.value=ch.peq[j];s.disabled=!ch.peqOn;$('d'+c+'_p'+j+'v').textContent=DPEQF[j]+' · '+(+ch.peq[j]).toFixed(1);}
+    $('d'+c+'_gain').value=ch.gain;$('d'+c+'_gainV').textContent=(+ch.gain).toFixed(1)+' dB';
+    $('d'+c+'_dly').value=ch.dly;$('d'+c+'_dlyV').textContent=(+ch.dly).toFixed(1)+' ms';
+    $('d'+c+'_lim').value=ch.lim;$('d'+c+'_limV').textContent=(+ch.lim).toFixed(1)+' dB';
+    const pb=$('d'+c+'_pol');pb.textContent=ch.pol?'180°':'0°';pb.classList.toggle('on',!!ch.pol);
+  }
+}
+function bindDlms(){
+  const D=()=>S&&S.dlms;
+  $('dlmsOn').onclick=()=>{const d=D();if(!d)return;d.on=d.on?0:1;tgTxt('dlmsOn',d.on);$('pg-dlms').classList.toggle('dlmsoff',!d.on);send({dlmsOn:d.on});draw();};
+  const inTgl=(id,key)=>{$(id).onclick=()=>{const d=D();if(!d)return;d[key]=d[key]?0:1;tgTxt(id,d[key]);send({[key]:d[key]});};};
+  inTgl('inOnA','inOnA');inTgl('inOnB','inOnB');
+  const inSl=(id,vid,key)=>{$(id).oninput=()=>{const d=D();if(!d)return;d[key]=+$(id).value;$(vid).textContent=d[key].toFixed(1)+' dB';sendSoon({[key]:d[key]});};};
+  inSl('inGainA','inGainAV','inGainA');inSl('inGainB','inGainBV','inGainB');
+  const inNum=(id,key)=>{$(id).onchange=()=>{const d=D();if(!d)return;d[key]=+$(id).value;send({[key]:d[key]});};};
+  inNum('inDlyA','inDlyA');inNum('inDlyB','inDlyB');
+  for(let c=0;c<2;c++){
+    const K=k=>'c'+c+'_'+k, ID=k=>'d'+c+'_'+k;
+    const ch=()=>{const d=D();return d?d.ch[c]:null;};
+    $(ID('on')).onclick=()=>{const h=ch();if(!h)return;h.on=h.on?0:1;tgTxt(ID('on'),h.on);$('dch'+c).classList.toggle('off',!h.on);send({[K('on')]:h.on});draw();};
+    $('dch'+c).querySelectorAll('.srcbtn').forEach((b,i)=>b.onclick=()=>{const h=ch();if(!h)return;h.src=i;$('dch'+c).querySelectorAll('.srcbtn').forEach(x=>x.classList.toggle('on',x==b));send({[K('src')]:i});});
+    const fTgl=(fid,key,slid)=>{$(fid).onclick=()=>{const h=ch();if(!h)return;h[key]=h[key]?0:1;tgTxt(fid,h[key]);if(slid)$(slid).disabled=!h[key];send({[K(key)]:h[key]});draw();};};
+    fTgl(ID('hpfOn'),'hpfOn',ID('hpfF'));fTgl(ID('lpfOn'),'lpfOn',ID('lpfF'));
+    $(ID('peqOn')).onclick=()=>{const h=ch();if(!h)return;h.peqOn=h.peqOn?0:1;tgTxt(ID('peqOn'),h.peqOn);for(let j=0;j<3;j++)$(ID('p'+j)).disabled=!h.peqOn;send({[K('peqOn')]:h.peqOn});draw();};
+    const fSl=(fid,vid,key)=>{$(fid).oninput=()=>{const h=ch();if(!h)return;h[key]=Math.round(sl2f(+$(fid).value));$(vid).textContent=fmtHz(h[key]);sendSoon({[K(key)]:h[key]});draw();};};
+    fSl(ID('hpfF'),ID('hpfV'),'hpfF');fSl(ID('lpfF'),ID('lpfV'),'lpfF');
+    $(ID('tf')).onchange=()=>{const h=ch();if(!h)return;h.tf=+$(ID('tf')).value;send({[K('tf')]:h.tf});draw();};
+    for(let j=0;j<3;j++){const pid=ID('p'+j);$(pid).oninput=()=>{const h=ch();if(!h)return;h.peq[j]=+$(pid).value;$(pid+'v').textContent=DPEQF[j]+' · '+h.peq[j].toFixed(1);sendSoon({[K('p'+j)]:h.peq[j]});draw();};}
+    const nSl=(fid,vid,key,unit,dr)=>{$(fid).oninput=()=>{const h=ch();if(!h)return;h[key]=+$(fid).value;$(vid).textContent=h[key].toFixed(1)+unit;sendSoon({[K(key)]:h[key]});if(dr)draw();};};
+    nSl(ID('gain'),ID('gainV'),'gain',' dB',true);nSl(ID('dly'),ID('dlyV'),'dly',' ms',false);nSl(ID('lim'),ID('limV'),'lim',' dB',false);
+    $(ID('pol')).onclick=()=>{const h=ch();if(!h)return;h.pol=h.pol?0:1;const pb=$(ID('pol'));pb.textContent=h.pol?'180°':'0°';pb.classList.toggle('on',!!h.pol);send({[K('pol')]:h.pol});};
+  }
 }
 
 /* ---------- interaksi grafik ---------- */
@@ -1377,7 +1779,7 @@ function fill(){
   $('volMax').value=S.volMax;$('volMax_v').textContent=Math.round(S.volMax*100)+'%';
   $('vol').value=S.vol;$('volDb').textContent=volDb(S.vol)+' dB';$('tvol').value=S.vol;$('tvolDb').textContent=volDb(S.vol)+' dB';tgl('tmute',S.mute);
   tgl('mute',S.mute);
-  fillChips();fillEditor();fillStrips();fillSlots();draw();
+  fillChips();fillEditor();fillStrips();fillSlots();fillDlms();draw();
 }
 /* ---------- binding ---------- */
 function bindTgl(id,key,after){$(id).onclick=()=>{S[key]=S[key]?0:1;tgl(id,S[key]);send({[key]:S[key]});if(after)after();draw();};}
@@ -1444,6 +1846,7 @@ function bind(){
   const doClip=()=>send({clipReset:1});
   $('clipResetBtn').onclick=doClip;
   $('wifiBtn').onclick=()=>{if(confirm('Alat restart dan gabung WiFi rumah dengan data baru. Lanjut?'))fetch('/api/wifi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({ssid:$('ssid').value,pass:$('wpass').value})});};
+  bindDlms();
 }
 /* ---------- data ---------- */
 async function load(){try{S=await (await fetch('/api/state')).json();fill();}catch(e){}}
@@ -1535,6 +1938,8 @@ static void setupWeb() {
     if (has("volMax")) params.volMax = constrain(f("volMax"), 0.2f, 1.0f);
     if (has("autoHr")) params.autoHeadroom = on("autoHr");
     if (has("clipReset")) clipCount = 0;
+    for (int a = 0; a < server.args(); a++)
+      dlmsSetKey(server.argName(a), server.arg(a).toFloat(), server.arg(a) == "1");
     if (coef) coefDirty = true;
     if (dyn) rebuildDynCoefs();
     server.send(200, "application/json", "{\"ok\":1}");
@@ -1595,6 +2000,7 @@ static bool serSetOne(const String &kv) {
     if (i < 0 || i >= NUM_GEQ) return false;
     params.geq[i] = constrain(v, -12.0f, 12.0f); coefDirty = true; return true;
   }
+  if (dlmsSetKey(k, v, b)) return true;
 #define SK(nm, field, lo, hi) if (k == nm) { field = constrain(v, lo, hi); coefDirty = true; return true; }
 #define BK(nm, field) if (k == nm) { field = b; coefDirty = true; return true; }
   SK("pre", params.preampDb, -24.0f, 24.0f)
@@ -1673,6 +2079,10 @@ void setup() {
   Serial0.begin(115200);
   delay(300);
   setFlat(params);
+  setDlmsDefaults();
+  loadDlmsNvs();
+  snapDlmsSmooth();
+  rebuildDlmsCoefs();
   snapSmoothToParams();
   rebuildCoefficients();
   rebuildDynCoefs();
@@ -1687,6 +2097,10 @@ void setup() {
 void loop() {
   wifiPoll();
   serialPoll();
+  static uint32_t lastDlmsSave = 0;
+  if (dlmsSaveDirty && millis() - lastDlmsSave > 2000) {
+    lastDlmsSave = millis(); dlmsSaveDirty = false; saveDlmsNvs();
+  }
   static uint32_t lastRta = 0;
   if (millis() - lastRta > 100) { lastRta = millis(); computeRTA(); }
   delay(2);

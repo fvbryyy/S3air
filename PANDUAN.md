@@ -65,9 +65,32 @@ tab Sistem di panel web; nilai panel tersimpan di NVS alat dan menimpa
   10 slot preset sendiri, banding A/B, ekspor/impor JSON.
 - **Sistem** - info firmware & jaringan, statistik ring buffer DSP
   (underrun/overflow), reset hitung clip, ganti kredensial WiFi.
+- **DLMS** - mode manajemen speaker per kanal (lihat bawah).
 
 Semua fader meluncur halus (glide) - menggeser saat musik jalan tidak
 menimbulkan kresek atau putus.
+
+### Mode DLMS (tab DLMS)
+
+Saklar **DLMS ON** mengganti seluruh rantai stereo reguler dengan
+rantai per kanal; OFF mengembalikan panel reguler persis seperti
+semula. Master volume, Mute & Dim tetap jalan di kedua mode.
+
+- **Input A / B** - gain (-60..+12 dB) dan delay 0..100 ms per input
+  (delay input untuk penyelarasan sistem), masing-masing bisa
+  dimatikan. A = kanal kiri USB, B = kanal kanan USB.
+- **Kanal L / R** - bebas sendiri-sendiri: sumber (IN A / IN B / A+B),
+  HPF dan LPF masing-masing dengan frekuensi & saklar sendiri, tipe
+  filter gabungan (LR12/24/48, BW12/24/48), PEQ 3 band (100 Hz,
+  1 kHz, 8 kHz), gain, delay 0..20 ms, limiter per kanal, balik
+  fase 0°/180°, dan saklar aktif per kanal.
+- Crossover adalah gabungan setelan biasa: misalnya L diberi
+  HPF 2,5 kHz dan R diberi LPF 2,5 kHz - atau dibalik, semua dari
+  kartu kanalnya masing-masing, tidak ada peran yang dikunci.
+- Grafik menggambar kurva gabungan tiap kanal (filter + PEQ) di
+  atas spektrum RTA yang tetap berjalan.
+- Setelan DLMS tersimpan otomatis (tahan mati listrik) dan ikut
+  tersimpan di 10 slot preset user.
 
 ## 6. Kontrol serial (Serial0, 115200 baud)
 
@@ -90,6 +113,11 @@ ceiling xfOn xfAmt width mono balance dlyL dlyR`, per band
 `b<i>_on b<i>_t b<i>_f b<i>_g b<i>_q b<i>_dyn b<i>_dthr b<i>_drng`
 (i = 0..9), GEQ `g<i>` (i = 0..30), dan `clipReset`.
 
+Kunci DLMS: `dlmsOn inOnA inOnB inGainA inGainB inDlyA inDlyB`, per
+kanal `c<i>_*` (i = 0 untuk L, 1 untuk R): `on src hpfOn hpfF lpfOn
+lpfF tf p0 p1 p2 peqOn gain dly lim pol`. Contoh:
+`set dlmsOn=1 c0_hpfF=200 c1_lpfF=200`.
+
 ## 7. Troubleshooting
 
 - **Windows tanda seru / Code 10** - USB CDC On Boot belum Disabled,
@@ -103,6 +131,7 @@ ceiling xfOn xfAmt width mono balance dlyL dlyR`, per band
 
 ## 8. Riwayat versi
 
+- **v5.0 S3 Air** - MODE DLMS ditanam ke firmware (sebelumnya hanya rancangan pratinjau): tab DLMS dengan saklar mode ON/OFF (bypass penuh, setelan tersimpan), kartu INPUT A/B (aktif, gain, delay 0..100 ms) dan dua kartu kanal L/R yang universal & bebas sendiri-sendiri - sumber A/B/A+B, HPF & LPF per kanal (frekuensi + saklar sendiri), tipe filter LR12/24/48 & BW12/24/48, PEQ 3 band per kanal, gain, delay 0..20 ms, limiter per kanal, balik fase; grafik menggambar kurva gabungan tiap kanal di atas spektrum RTA. Setelan DLMS tersimpan otomatis di NVS dan ikut di 10 slot preset user; kunci serial DLMS ditambahkan. TEMA WARNA diganti SOFT HIJAU ala VoiceMeeter (aksen hijau soft #6fcf97 menggantikan cyan; strip master & kanal R jadi mawar soft; kurva & spektrum ikut hijau). RAM naik ke 55% (buffer delay input DLMS).
 - **v4.3.2 S3 Air** - spektrum RTA kini aktif di SEMUA tab: tab Gate & Comp sekarang juga menggambar spektrum di belakang kurva transfernya (di v4.3 dua tab ini masih dikecualikan), dan loop animasi menggambar ulang di semua tab tanpa kecuali.
 - **v4.3.1 S3 Air** - perbaikan posisi fader: rel & kap kini lurus di tengah strip (sebelumnya kap miring +21px ke kanan dari rel karena kap menengahi kotak input, bukan rel; diukur dari piksel screenshot alat user).
 - **v4.3 S3 Air** - tema warna SOFT di atas basis v4.1 (pilihan final user setelah rancangan VoiceMeeter oranye & arang ditolak): cyan dilembutkan (#63c7de), pendaran dikurangi, warna band pastel, pink menara dilembutkan; fader diganti kap mixer (rel slot gelap + kap grafit bergerigi bergaris penanda, master bergaris merah muda) dengan garis penanda tengah rel; PERBAIKAN BUG: spektrum RTA kini bergerak di semua tab bergrafik (sebelumnya cuma bergerak di tab EQ lalu beku di tab lain karena loop animasi cuma menggambar ulang pada tab EQ).
