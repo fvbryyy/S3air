@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.0 S3 Air"
+#define FW_VERSION "v5.0.1 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -1292,7 +1292,7 @@ input[type=range]{accent-color:#22d3ee}
         </div>
         <div class="dlmsgrid">
     <div class="box dch" id="dch0">
-      <h5><span style="color:#6fcf97;font-size:14px">L</span><button class="tgl" id="d0_on" style="float:right">ON</button></h5>
+      <h5><span style="color:#3f8a5f;font-size:14px">L</span><button class="tgl" id="d0_on" style="float:right">ON</button></h5>
       <div class="drow"><label>SUMBER</label><button class="tgl srcbtn">IN A</button><button class="tgl srcbtn">IN B</button><button class="tgl srcbtn">A+B</button></div>
       <div class="drow"><label>HPF</label><button class="tgl" id="d0_hpfOn">ON</button><input type="range" id="d0_hpfF" min="0" max="1000" value="700"><span class="val" id="d0_hpfV">2.5 kHz</span></div>
       <div class="drow"><label>LPF</label><button class="tgl" id="d0_lpfOn">ON</button><input type="range" id="d0_lpfF" min="0" max="1000" value="700"><span class="val" id="d0_lpfV">2.5 kHz</span></div>
@@ -1409,15 +1409,15 @@ input.vfader::-moz-range-thumb{width:40px;height:21px;margin-left:-20px;border-r
 
 <style>
 /* ===== S3 Air v5.0 - tema SOFT HIJAU ala VoiceMeeter + tab DLMS ===== */
-:root{--teal:#6fcf97;--teal2:#3e7d5a;--org:#e58f8f}
-body{background:radial-gradient(1100px 420px at 50% -140px,rgba(111,207,151,.08),transparent 62%),#05070d}
-#logo b span{color:#6fcf97;text-shadow:0 0 10px rgba(111,207,151,.35)}
-#dispwrap{box-shadow:inset 0 0 46px rgba(111,207,151,.03)}
-.tabbtn.act{background:#6fcf97;border-color:#6fcf97;box-shadow:0 0 10px rgba(111,207,151,.25)}
-.tgl.on{background:#6fcf97;border-color:#6fcf97;box-shadow:0 0 10px rgba(111,207,151,.25)}
-.chip.sel{outline-color:#6fcf97}
-input[type=range]{accent-color:#6fcf97;--capline:#6fcf97}
-#faderbank{border-top-color:#6fcf97;box-shadow:0 -4px 18px rgba(111,207,151,.12)}
+:root{--teal:#3f8a5f;--teal2:#2c5c40;--org:#e58f8f}
+body{background:radial-gradient(1100px 420px at 50% -140px,rgba(63,138,95,.05),transparent 62%),#05070d}
+#logo b span{color:#3f8a5f;text-shadow:0 0 10px rgba(63,138,95,.22)}
+#dispwrap{box-shadow:inset 0 0 46px rgba(63,138,95,.03)}
+.tabbtn.act{background:#3f8a5f;border-color:#3f8a5f;box-shadow:0 0 10px rgba(63,138,95,.15)}
+.tgl.on{background:#3f8a5f;border-color:#3f8a5f;box-shadow:0 0 10px rgba(63,138,95,.15)}
+.chip.sel{outline-color:#3f8a5f}
+input[type=range]{accent-color:#3f8a5f;--capline:#3f8a5f}
+#faderbank{border-top-color:#3f8a5f;box-shadow:0 -4px 18px rgba(63,138,95,.08)}
 #masterstrip{border-color:#e58f8f;box-shadow:0 0 12px rgba(229,143,143,.16)}
 .towIn{border-color:#e58f8f;box-shadow:0 0 12px rgba(229,143,143,.16)}
 body[data-tab="dlms"] #strips{display:none!important}
@@ -1505,7 +1505,7 @@ function draw(){
   if(tab=='dlms')return drawDlms(W,H);
   // RTA
   const bw=W/31;
-  ctx.fillStyle='rgba(111,207,151,0.45)';
+  ctx.fillStyle='rgba(63,138,95,0.38)';
   for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(i*bw+1,H-v*H,bw-2,v*H);}
   // grid
   ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
@@ -1514,8 +1514,8 @@ function draw(){
   // kurva total
   const N=140;ctx.beginPath();
   for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,totalDb(f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}
-  ctx.strokeStyle='#6fcf97';ctx.lineWidth=2.2;ctx.stroke();
-  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle='rgba(111,207,151,0.12)';ctx.fill();
+  ctx.strokeStyle='#3f8a5f';ctx.lineWidth=2.2;ctx.stroke();
+  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle='rgba(63,138,95,0.10)';ctx.fill();
   // kurva band terpilih
   if(S.eqMode==0){const b=S.bands[sel];if(b.on){ctx.beginPath();for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,respDb(coef(b.t,b.f,b.g,b.q),f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.strokeStyle=BCOL[sel];ctx.lineWidth=1.2;ctx.stroke();}}
   // titik node
@@ -1526,14 +1526,14 @@ function draw(){
       ctx.fillStyle='#0a0a0a';ctx.font='bold 11px Arial';ctx.textAlign='center';ctx.fillText(i+1,x,y+4);ctx.textAlign='left';}
   }else{
     for(let i=0;i<31;i++){const x=xFor(GEQF[i],W),y=yFor(S.geq[i],H);
-      ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fillStyle='#6fcf97';ctx.fill();ctx.strokeStyle='#111';ctx.stroke();}
+      ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fillStyle='#3f8a5f';ctx.fill();ctx.strokeStyle='#111';ctx.stroke();}
   }
 }
 function drawDyn(W,H){
   const x0=40,x1=W-8,y0=8,y1=H-22;
   const X=v=>x0+(v+60)/60*(x1-x0), Y=v=>y0+(1-(v+60)/60)*(y1-y0);
   // RTA di belakang kurva transfer — spektrum tetap aktif di tab Gate/Comp
-  const bw=(x1-x0)/31;ctx.fillStyle='rgba(111,207,151,0.45)';
+  const bw=(x1-x0)/31;ctx.fillStyle='rgba(63,138,95,0.38)';
   for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(x0+i*bw+1,y1-v*(y1-y0),bw-2,v*(y1-y0));}
   ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.font='10px Arial';
   for(let v=-50;v<0;v+=10){ctx.beginPath();ctx.moveTo(X(v),y0);ctx.lineTo(X(v),y1);ctx.stroke();ctx.beginPath();ctx.moveTo(x0,Y(v));ctx.lineTo(x1,Y(v));ctx.stroke();ctx.fillText(v,X(v)-4,y1+12);ctx.fillText(v,6,Y(v)+3);}
@@ -1543,13 +1543,13 @@ function drawDyn(W,H){
     if(tab=='gate'){out=!S.gateOn?inn:(inn>S.gateThr?inn:-60);}
     else{out=inn;if(S.compOn&&inn>S.compThr)out=S.compThr+(inn-S.compThr)/Math.max(S.compRatio,1);out+=S.compOn?S.compMake:0;if(S.limiter)out=Math.min(out,S.ceiling);}
     out=Math.max(-60,Math.min(3,out));const px=X(inn),py=Y(out);i?ctx.lineTo(px,py):ctx.moveTo(px,py);}
-  ctx.strokeStyle='#6fcf97';ctx.lineWidth=2.2;ctx.stroke();
+  ctx.strokeStyle='#3f8a5f';ctx.lineWidth=2.2;ctx.stroke();
   if(tab=='comp'&&S.limiter){ctx.strokeStyle='#e03131';ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(x0,Y(S.ceiling));ctx.lineTo(x1,Y(S.ceiling));ctx.stroke();ctx.setLineDash([]);}
 }
 
 /* ---------- DLMS ---------- */
 const DPEQF=[100,1000,8000];
-const DCOL=['#6fcf97','#e58f8f'];
+const DCOL=['#3f8a5f','#e58f8f'];
 function f2sl(f){return Math.round(Math.log10(Math.min(Math.max(f,20),20000)/20)/3*1000);}
 function sl2f(v){return 20*Math.pow(1000,v/1000);}
 function fmtHz(f){f=Math.round(f);return f>=1000?(f/1000).toFixed(2).replace(/\.?0+$/,'')+' kHz':f+' Hz';}
@@ -1581,7 +1581,7 @@ function dlmsDb(ch,f){
   return d;
 }
 function drawDlms(W,H){
-  const bw=W/31;ctx.fillStyle='rgba(111,207,151,0.45)';
+  const bw=W/31;ctx.fillStyle='rgba(63,138,95,0.38)';
   for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(i*bw+1,H-v*H,bw-2,v*H);}
   ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
   [20,50,100,200,500,1000,2000,5000,10000,20000].forEach(f=>{const x=xFor(f,W);ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();ctx.fillText(fmtF(f),x+2,H-4);});

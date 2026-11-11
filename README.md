@@ -67,5 +67,5 @@ state
 - Rilis baru dari mbah → `git pull` di PC → upload via Arduino IDE.
 - Edit lokal di PC → `git add -A && git commit -m "pesan" && git push`.
 
-Versi firmware saat ini: **v5.0 S3 Air** — panel web gaya X Air (simple, satu fokus per tab), kini dengan mode DLMS per kanal dan tema soft hijau. (Proyek ini sebelumnya bernama MbahDAC;
+Versi firmware saat ini: **v5.0.1 S3 Air** — panel web gaya X Air (simple, satu fokus per tab), kini dengan mode DLMS per kanal dan tema soft hijau gelap. (Proyek ini sebelumnya bernama MbahDAC;
 identitas USB & alamat panel masih `MbahDAC USB` / `mbahdac.local`).
