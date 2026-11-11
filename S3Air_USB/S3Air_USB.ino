@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.0.1 S3 Air"
+#define FW_VERSION "v5.0.2 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -351,8 +351,8 @@ static void setDlmsDefaults() {
     h.peqOn = true;
     h.limDb = (c == 0) ? -3.0f : -1.0f;
   }
-  dlms.ch[0].hpfOn = true;                        // contoh silang bawaan: L = HPF, R = LPF
-  dlms.ch[1].lpfOn = true;
+  // HPF/LPF bawaan MATI: mode DLMS menyala dalam keadaan netral (full-range),
+  // crossover adalah setelan yang dipilih user sendiri, bukan jebakan bawaan.
 }
 
 static void coefHP2q(BiquadCoef &c, float fs, float f0, float q, bool on) {
@@ -827,13 +827,13 @@ static bool loadUserPreset(int slot) {
 
 static void saveDlmsNvs() {
   prefs.begin("mbahdac2", false);
-  prefs.putBytes("dlms", &dlms, sizeof(dlms));
+  prefs.putBytes("dlms2", &dlms, sizeof(dlms));
   prefs.end();
 }
 static void loadDlmsNvs() {
   prefs.begin("mbahdac2", true);
   DlmsParams tmp;
-  size_t r = prefs.getBytes("dlms", &tmp, sizeof(tmp));
+  size_t r = prefs.getBytes("dlms2", &tmp, sizeof(tmp));
   prefs.end();
   if (r == sizeof(tmp)) dlms = tmp;
 }
@@ -1420,7 +1420,7 @@ input[type=range]{accent-color:#3f8a5f;--capline:#3f8a5f}
 #faderbank{border-top-color:#3f8a5f;box-shadow:0 -4px 18px rgba(63,138,95,.08)}
 #masterstrip{border-color:#e58f8f;box-shadow:0 0 12px rgba(229,143,143,.16)}
 .towIn{border-color:#e58f8f;box-shadow:0 0 12px rgba(229,143,143,.16)}
-body[data-tab="dlms"] #strips{display:none!important}
+#bandbar{overflow-y:auto;min-height:0;scrollbar-width:thin}
 /* --- halaman DLMS --- */
 #pg-dlms.dlmsoff .dlmsbody{opacity:.38;pointer-events:none}
 .dlmsgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
@@ -1645,7 +1645,8 @@ function bindDlms(){
     $(ID('tf')).onchange=()=>{const h=ch();if(!h)return;h.tf=+$(ID('tf')).value;send({[K('tf')]:h.tf});draw();};
     for(let j=0;j<3;j++){const pid=ID('p'+j);$(pid).oninput=()=>{const h=ch();if(!h)return;h.peq[j]=+$(pid).value;$(pid+'v').textContent=DPEQF[j]+' · '+h.peq[j].toFixed(1);sendSoon({[K('p'+j)]:h.peq[j]});draw();};}
     const nSl=(fid,vid,key,unit,dr)=>{$(fid).oninput=()=>{const h=ch();if(!h)return;h[key]=+$(fid).value;$(vid).textContent=h[key].toFixed(1)+unit;sendSoon({[K(key)]:h[key]});if(dr)draw();};};
-    nSl(ID('gain'),ID('gainV'),'gain',' dB',true);nSl(ID('dly'),ID('dlyV'),'dly',' ms',false);nSl(ID('lim'),ID('limV'),'lim',' dB',false);
+    $(ID('gain')).oninput=()=>{const h=ch();if(!h)return;h.gain=+$(ID('gain')).value;$(ID('gainV')).textContent=h.gain.toFixed(1)+' dB';const sf=$('sf'+c);if(sf){sf.value=h.gain;sf.closest('.strip').querySelector('.val').textContent=h.gain.toFixed(1);}sendSoon({[K('gain')]:h.gain});draw();};
+    nSl(ID('dly'),ID('dlyV'),'dly',' ms',false);nSl(ID('lim'),ID('limV'),'lim',' dB',false);
     $(ID('pol')).onclick=()=>{const h=ch();if(!h)return;h.pol=h.pol?0:1;const pb=$(ID('pol'));pb.textContent=h.pol?'180°':'0°';pb.classList.toggle('on',!!h.pol);send({[K('pol')]:h.pol});};
   }
 }
@@ -1704,6 +1705,18 @@ function fillChips(){
 }
 function fillStrips(){
   const w=$('strips');w.innerHTML='';
+  if(tab=='dlms'&&S.dlms&&S.dlms.ch){
+    S.dlms.ch.forEach((h,c)=>{
+      const d=document.createElement('div');d.className='strip'+(h.on?'':' off');
+      d.innerHTML=`<div class="scrib" style="background:${DCOL[c]}">${c==0?'L':'R'}</div><div class="val">${(+h.gain).toFixed(1)}</div>`;
+      const f=document.createElement('input');f.type='range';f.className='vfader';f.id='sf'+c;f.min=-60;f.max=12;f.step=0.5;f.value=h.gain;
+      f.oninput=()=>{h.gain=+f.value;d.querySelector('.val').textContent=h.gain.toFixed(1);const cs=$('d'+c+'_gain');if(cs){cs.value=h.gain;$('d'+c+'_gainV').textContent=h.gain.toFixed(1)+' dB';}sendSoon({['c'+c+'_gain']:h.gain});draw();};
+      const on=document.createElement('button');on.className='tgl onled'+(h.on?' on':'');on.textContent='ON';
+      on.onclick=()=>{h.on=h.on?0:1;send({['c'+c+'_on']:h.on});fillStrips();fillDlms();draw();};
+      d.appendChild(f);d.appendChild(on);w.appendChild(d);
+    });
+    return;
+  }
   if(S.eqMode==0){
     S.bands.forEach((b,i)=>{
       const d=document.createElement('div');d.className='strip'+(i==sel?' sel':'')+(b.on?'':' off');
@@ -1789,6 +1802,7 @@ function bind(){
     tab=b.dataset.tab;document.body.dataset.tab=tab;
     document.querySelectorAll('.tabbtn').forEach(x=>x.classList.toggle('act',x==b));
     document.querySelectorAll('.pg').forEach(p=>p.classList.toggle('act',p.id=='pg-'+tab||(tab=='sys'&&p.id=='pg-sys')));
+    if(S)fillStrips();
     draw();
   });
   $('pre').oninput=()=>{S.preamp=+$('pre').value;$('pre_v').textContent=S.preamp.toFixed(1)+' dB';sendSoon({preamp:S.preamp});};

@@ -91,6 +91,9 @@ semula. Master volume, Mute & Dim tetap jalan di kedua mode.
   atas spektrum RTA yang tetap berjalan.
 - Setelan DLMS tersimpan otomatis (tahan mati listrik) dan ikut
   tersimpan di 10 slot preset user.
+- Selama tab DLMS terbuka, bank fader menampilkan strip L dan R
+  (fader = gain kanal, tombol ON = aktif kanal) di samping strip
+  MAIN; area tab bisa digulir di dalam konsol bila isinya tinggi.
 
 ## 6. Kontrol serial (Serial0, 115200 baud)
 
@@ -131,6 +134,7 @@ lpfF tf p0 p1 p2 peqOn gain dly lim pol`. Contoh:
 
 ## 8. Riwayat versi
 
+- **v5.0.2 S3 Air** - tiga perbaikan dari uji alat user atas v5.0.1: (1) mode DLMS kini menyala dalam keadaan NETRAL — HPF/LPF bawaan yang tadinya aktif sebagai contoh silang (L=HPF, R=LPF @2,5 kHz) dimatikan, jadi menyalakan DLMS tidak lagi mengubah suara; setelan DLMS lama dibuang sekali lewat kunci simpan baru. (2) Area tab kini bisa digulir di dalam konsol — isi tab yang tinggi (terutama DLMS) tidak lagi terpotong di balik bank fader. (3) Bank fader di tab DLMS kini menampilkan strip L & R individual (gain kanal + ON) di samping MAIN, sesuai rancangan.
 - **v5.0.1 S3 Air** - tema hijau dilembutkan & digelapkan atas koreksi user ("terlalu kontras, kurang gelap soft"): aksen #6fcf97 -> #3f8a5f di seluruh panel (tab aktif, tombol, fader, kurva, spektrum) dan pendaran dikurangi. Fungsi identik dengan v5.0.
 - **v5.0 S3 Air** - MODE DLMS ditanam ke firmware (sebelumnya hanya rancangan pratinjau): tab DLMS dengan saklar mode ON/OFF (bypass penuh, setelan tersimpan), kartu INPUT A/B (aktif, gain, delay 0..100 ms) dan dua kartu kanal L/R yang universal & bebas sendiri-sendiri - sumber A/B/A+B, HPF & LPF per kanal (frekuensi + saklar sendiri), tipe filter LR12/24/48 & BW12/24/48, PEQ 3 band per kanal, gain, delay 0..20 ms, limiter per kanal, balik fase; grafik menggambar kurva gabungan tiap kanal di atas spektrum RTA. Setelan DLMS tersimpan otomatis di NVS dan ikut di 10 slot preset user; kunci serial DLMS ditambahkan. TEMA WARNA diganti SOFT HIJAU ala VoiceMeeter (aksen hijau soft #6fcf97 menggantikan cyan; strip master & kanal R jadi mawar soft; kurva & spektrum ikut hijau). RAM naik ke 55% (buffer delay input DLMS).
 - **v4.3.2 S3 Air** - spektrum RTA kini aktif di SEMUA tab: tab Gate & Comp sekarang juga menggambar spektrum di belakang kurva transfernya (di v4.3 dua tab ini masih dikecualikan), dan loop animasi menggambar ulang di semua tab tanpa kecuali.
