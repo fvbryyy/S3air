@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.0.7 S3 Air"
+#define FW_VERSION "v5.0.8 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -518,6 +518,16 @@ static void processBlock(int16_t *s, int frames) {
   float targetDlyR = params.delayRms;
   float sumL = 0, sumR = 0;
   bool dlmsLive = dlms.on || dlmsTouched; // gerbang kerja DLMS di task audio
+  // Target penghalus DLMS dihitung SEKALI per blok — db2lin() adalah powf() yang mahal;
+  // memanggilnya per sampel (v5.0-v5.0.7) membuat blok DLMS 11,1 ms > anggaran 10,67 ms.
+  float tgtInGainA = dlms.inOnA ? db2lin(dlms.inGainA) : 0.0f;
+  float tgtInGainB = dlms.inOnB ? db2lin(dlms.inGainB) : 0.0f;
+  float tgtChGain[2], tgtChCeil[2];
+  for (int c = 0; c < 2; c++) {
+    DlmsCh &hc = dlms.ch[c];
+    tgtChGain[c] = hc.on ? db2lin(hc.gainDb) * (hc.pol ? -1.0f : 1.0f) : 0.0f;
+    tgtChCeil[c] = db2lin(hc.limDb);
+  }
 
   for (int n = 0; n < frames; n++) {
     smoothPreamp += (targetPreamp - smoothPreamp) * SMOOTH_COEF;
@@ -539,15 +549,14 @@ static void processBlock(int16_t *s, int frames) {
     smCompRatio += (targetCompRatio - smCompRatio) * SMOOTH_COEF;
     smMakeup += (targetMakeup - smMakeup) * SMOOTH_COEF;
     if (dlmsLive) {
-      smInGainA += ((dlms.inOnA ? db2lin(dlms.inGainA) : 0.0f) - smInGainA) * SMOOTH_COEF;
-      smInGainB += ((dlms.inOnB ? db2lin(dlms.inGainB) : 0.0f) - smInGainB) * SMOOTH_COEF;
+      smInGainA += (tgtInGainA - smInGainA) * SMOOTH_COEF;
+      smInGainB += (tgtInGainB - smInGainB) * SMOOTH_COEF;
       smInDlyA += (dlms.inDlyA - smInDlyA) * SMOOTH_COEF;
       smInDlyB += (dlms.inDlyB - smInDlyB) * SMOOTH_COEF;
       for (int c = 0; c < 2; c++) {
-        DlmsCh &hc = dlms.ch[c];
-        smChGain[c] += ((hc.on ? db2lin(hc.gainDb) * (hc.pol ? -1.0f : 1.0f) : 0.0f) - smChGain[c]) * SMOOTH_COEF;
-        smChCeil[c] += (db2lin(hc.limDb) - smChCeil[c]) * SMOOTH_COEF;
-        smChDly[c] += (hc.dlyMs - smChDly[c]) * SMOOTH_COEF;
+        smChGain[c] += (tgtChGain[c] - smChGain[c]) * SMOOTH_COEF;
+        smChCeil[c] += (tgtChCeil[c] - smChCeil[c]) * SMOOTH_COEF;
+        smChDly[c] += (dlms.ch[c].dlyMs - smChDly[c]) * SMOOTH_COEF;
       }
     }
     // laju kontrol (tiap 48 sampel): luncurkan frekuensi/Q/HPF secara rasio, bangun ulang bila berubah
@@ -871,13 +880,9 @@ static bool loadUserPreset(int slot) {
 }
 
 static void saveDlmsNvs() {
-  Serial0.println("[dbg] NVS simpan: mulai");
   prefs.begin("mbahdac2", false);
-  Serial0.println("[dbg] NVS simpan: begin ok");
   prefs.putBytes("dlms2", &dlms, sizeof(dlms));
-  Serial0.println("[dbg] NVS simpan: putBytes ok");
   prefs.end();
-  Serial0.println("[dbg] NVS simpan: selesai");
 }
 static void loadDlmsNvs() {
   prefs.begin("mbahdac2", true);
@@ -1471,6 +1476,7 @@ input[type=range]{accent-color:#3f8a5f;--capline:#3f8a5f}
 .towIn{border-color:#e58f8f;box-shadow:0 0 12px rgba(229,143,143,.16)}
 #bandbar{overflow-y:auto;min-height:0;scrollbar-width:thin}
 #strips .strip.dls{flex:0 0 84px}
+#graph{cursor:move}
 /* --- halaman DLMS --- */
 #pg-dlms.dlmsoff .dlmsbody{opacity:.38;pointer-events:none}
 .dlmsgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
@@ -2002,10 +2008,8 @@ static void setupWeb() {
     if (has("volMax")) params.volMax = constrain(f("volMax"), 0.2f, 1.0f);
     if (has("autoHr")) params.autoHeadroom = on("autoHr");
     if (has("clipReset")) clipCount = 0;
-    int dlmsHit = 0;
     for (int a = 0; a < server.args(); a++)
-      if (dlmsSetKey(server.argName(a), server.arg(a).toFloat(), server.arg(a) == "1")) dlmsHit++;
-    if (dlmsHit) Serial0.printf("[dbg] set DLMS x%d diproses, on=%d\n", dlmsHit, dlms.on ? 1 : 0);
+      dlmsSetKey(server.argName(a), server.arg(a).toFloat(), server.arg(a) == "1");
     if (coef) coefDirty = true;
     if (dyn) rebuildDynCoefs();
     server.send(200, "application/json", "{\"ok\":1}");
