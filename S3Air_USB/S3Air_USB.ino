@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v4.3.1 S3 Air"
+#define FW_VERSION "v4.3.2 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -1233,6 +1233,9 @@ function draw(){
 function drawDyn(W,H){
   const x0=40,x1=W-8,y0=8,y1=H-22;
   const X=v=>x0+(v+60)/60*(x1-x0), Y=v=>y0+(1-(v+60)/60)*(y1-y0);
+  // RTA di belakang kurva transfer — spektrum tetap aktif di tab Gate/Comp
+  const bw=(x1-x0)/31;ctx.fillStyle='rgba(99,199,222,0.45)';
+  for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(x0+i*bw+1,y1-v*(y1-y0),bw-2,v*(y1-y0));}
   ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.font='10px Arial';
   for(let v=-50;v<0;v+=10){ctx.beginPath();ctx.moveTo(X(v),y0);ctx.lineTo(X(v),y1);ctx.stroke();ctx.beginPath();ctx.moveTo(x0,Y(v));ctx.lineTo(x1,Y(v));ctx.stroke();ctx.fillText(v,X(v)-4,y1+12);ctx.fillText(v,6,Y(v)+3);}
   ctx.strokeStyle='#27435f';ctx.beginPath();ctx.moveTo(X(-60),Y(-60));ctx.lineTo(X(0),Y(0));ctx.stroke();
@@ -1449,7 +1452,7 @@ setInterval(async()=>{try{const m=await (await fetch('/api/meter')).json();
   $('grbar').style.width=Math.min(100,Math.max(0,-m.gr/24*100))+'%';$('gr_v').textContent=m.gr+' dB';$('clipct').textContent=m.clip;}catch(e){}},200);
 let rtBusy=false;
 setInterval(async()=>{if(rtBusy)return;rtBusy=true;try{const r=await (await fetch('/api/rta')).json();RT=r.rta;}catch(e){}rtBusy=false;},150);
-setInterval(()=>{let moved=false;for(let i=0;i<31;i++){const d=RT[i]-RTs[i];if(Math.abs(d)>0.05){RTs[i]+=d*(d>0?0.55:0.16);moved=true;}}if(moved&&tab!='gate'&&tab!='comp')draw();},50);
+setInterval(()=>{let moved=false;for(let i=0;i<31;i++){const d=RT[i]-RTs[i];if(Math.abs(d)>0.05){RTs[i]+=d*(d>0?0.55:0.16);moved=true;}}if(moved)draw();},50);
 window.addEventListener('resize',()=>{fitCv();draw();});
 let sysBusy=false;
 setInterval(async()=>{if(tab!='sys'||sysBusy)return;sysBusy=true;try{const st=await (await fetch('/api/state')).json();
@@ -1458,7 +1461,6 @@ setInterval(async()=>{if(tab!='sys'||sysBusy)return;sysBusy=true;try{const st=aw
 setInterval(()=>{if(!S)load();},3000);
 fitCv();bind();load();
 </script></body></html>
-
 )HTML";
 
 static void setupWeb() {
