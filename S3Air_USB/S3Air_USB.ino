@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.0.3 S3 Air"
+#define FW_VERSION "v5.0.4 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -833,7 +833,7 @@ static bool loadUserPreset(int slot) {
   DlmsParams dtmp;
   size_t dr = prefs.getBytes(dkey, &dtmp, sizeof(dtmp));
   prefs.end();
-  if (dr == sizeof(dtmp)) { dlms = dtmp; snapDlmsSmooth(); rebuildDlmsCoefs(); }
+  if (dr == sizeof(dtmp)) { dlms = dtmp; dlms.on = false; snapDlmsSmooth(); rebuildDlmsCoefs(); }
   return true;
 }
 
@@ -2108,6 +2108,7 @@ void setup() {
   setFlat(params);
   setDlmsDefaults();
   loadDlmsNvs();
+  dlms.on = false; // pengaman boot v5.0.4: mode DLMS selalu mulai OFF (setelan lain utuh)
   snapDlmsSmooth();
   rebuildDlmsCoefs();
   snapSmoothToParams();
