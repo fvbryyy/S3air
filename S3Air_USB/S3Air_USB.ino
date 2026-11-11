@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.0.2 S3 Air"
+#define FW_VERSION "v5.0.3 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -339,6 +339,7 @@ static float bDlmsHpfF[2] = {-1, -1}, bDlmsLpfF[2] = {-1, -1};
 static float bDlmsPeq[2][3] = {};
 static uint16_t bDlmsBits[2] = {0xFFFF, 0xFFFF};
 static volatile bool dlmsSaveDirty = false;
+static volatile bool dlmsTouched = true;  // ada setelan DLMS baru: task audio menyiapkan koefisiennya sekali
 
 static void setDlmsDefaults() {
   memset(&dlms, 0, sizeof(dlms));
@@ -428,7 +429,7 @@ static void snapDlmsSmooth() {
 }
 
 // Satu kunci setelan DLMS (dipakai panel web & serial bersama)
-static bool dlmsSetKey(const String &k, float v, bool b) {
+static bool dlmsSetKeyImpl(const String &k, float v, bool b) {
   if (k == "dlmsOn") { dlms.on = b; dlmsSaveDirty = true; return true; }
   if (k == "inOnA") { dlms.inOnA = b; dlmsSaveDirty = true; return true; }
   if (k == "inOnB") { dlms.inOnB = b; dlmsSaveDirty = true; return true; }
@@ -458,6 +459,11 @@ static bool dlmsSetKey(const String &k, float v, bool b) {
     dlmsSaveDirty = true; return true;
   }
   return false;
+}
+static bool dlmsSetKey(const String &k, float v, bool b) {
+  bool ok = dlmsSetKeyImpl(k, v, b);
+  if (ok) dlmsTouched = true;
+  return ok;
 }
 
 
@@ -511,6 +517,7 @@ static void processBlock(int16_t *s, int frames) {
   float targetDlyL = params.delayLms;
   float targetDlyR = params.delayRms;
   float sumL = 0, sumR = 0;
+  bool dlmsLive = dlms.on || dlmsTouched; // gerbang kerja DLMS di task audio
 
   for (int n = 0; n < frames; n++) {
     smoothPreamp += (targetPreamp - smoothPreamp) * SMOOTH_COEF;
@@ -531,15 +538,17 @@ static void processBlock(int16_t *s, int frames) {
     smCompThrDb += (targetCompThrDb - smCompThrDb) * SMOOTH_COEF;
     smCompRatio += (targetCompRatio - smCompRatio) * SMOOTH_COEF;
     smMakeup += (targetMakeup - smMakeup) * SMOOTH_COEF;
-    smInGainA += ((dlms.inOnA ? db2lin(dlms.inGainA) : 0.0f) - smInGainA) * SMOOTH_COEF;
-    smInGainB += ((dlms.inOnB ? db2lin(dlms.inGainB) : 0.0f) - smInGainB) * SMOOTH_COEF;
-    smInDlyA += (dlms.inDlyA - smInDlyA) * SMOOTH_COEF;
-    smInDlyB += (dlms.inDlyB - smInDlyB) * SMOOTH_COEF;
-    for (int c = 0; c < 2; c++) {
-      DlmsCh &hc = dlms.ch[c];
-      smChGain[c] += ((hc.on ? db2lin(hc.gainDb) * (hc.pol ? -1.0f : 1.0f) : 0.0f) - smChGain[c]) * SMOOTH_COEF;
-      smChCeil[c] += (db2lin(hc.limDb) - smChCeil[c]) * SMOOTH_COEF;
-      smChDly[c] += (hc.dlyMs - smChDly[c]) * SMOOTH_COEF;
+    if (dlmsLive) {
+      smInGainA += ((dlms.inOnA ? db2lin(dlms.inGainA) : 0.0f) - smInGainA) * SMOOTH_COEF;
+      smInGainB += ((dlms.inOnB ? db2lin(dlms.inGainB) : 0.0f) - smInGainB) * SMOOTH_COEF;
+      smInDlyA += (dlms.inDlyA - smInDlyA) * SMOOTH_COEF;
+      smInDlyB += (dlms.inDlyB - smInDlyB) * SMOOTH_COEF;
+      for (int c = 0; c < 2; c++) {
+        DlmsCh &hc = dlms.ch[c];
+        smChGain[c] += ((hc.on ? db2lin(hc.gainDb) * (hc.pol ? -1.0f : 1.0f) : 0.0f) - smChGain[c]) * SMOOTH_COEF;
+        smChCeil[c] += (db2lin(hc.limDb) - smChCeil[c]) * SMOOTH_COEF;
+        smChDly[c] += (hc.dlyMs - smChDly[c]) * SMOOTH_COEF;
+      }
     }
     // laju kontrol (tiap 48 sampel): luncurkan frekuensi/Q/HPF secara rasio, bangun ulang bila berubah
     if (++ctrlCount >= 48) {
@@ -549,12 +558,15 @@ static void processBlock(int16_t *s, int frames) {
         smBandQ[i] += (params.band[i].q - smBandQ[i]) * 0.09f;
       }
       smHpfFreq *= 1.0f + 0.09f * (params.hpfFreq / smHpfFreq - 1.0f);
-      for (int c = 0; c < 2; c++) {
-        smDlmsHpfF[c] *= 1.0f + 0.09f * (dlms.ch[c].hpfF / smDlmsHpfF[c] - 1.0f);
-        smDlmsLpfF[c] *= 1.0f + 0.09f * (dlms.ch[c].lpfF / smDlmsLpfF[c] - 1.0f);
-        for (int j = 0; j < 3; j++) smDlmsPeq[c][j] += (dlms.ch[c].peq[j] - smDlmsPeq[c][j]) * 0.09f;
+      if (dlmsLive) {
+        for (int c = 0; c < 2; c++) {
+          smDlmsHpfF[c] *= 1.0f + 0.09f * (dlms.ch[c].hpfF / smDlmsHpfF[c] - 1.0f);
+          smDlmsLpfF[c] *= 1.0f + 0.09f * (dlms.ch[c].lpfF / smDlmsLpfF[c] - 1.0f);
+          for (int j = 0; j < 3; j++) smDlmsPeq[c][j] += (dlms.ch[c].peq[j] - smDlmsPeq[c][j]) * 0.09f;
+        }
+        if (dlmsChanged()) rebuildDlmsCoefs();
+        if (!dlms.on) dlmsTouched = false;
       }
-      if (dlmsChanged()) rebuildDlmsCoefs();
       if (filtersChanged()) {
         rebuildCoefficients();
         mb = mainBank[activeBank]; gb = geqBank[activeBank];
@@ -1421,6 +1433,7 @@ input[type=range]{accent-color:#3f8a5f;--capline:#3f8a5f}
 #masterstrip{border-color:#e58f8f;box-shadow:0 0 12px rgba(229,143,143,.16)}
 .towIn{border-color:#e58f8f;box-shadow:0 0 12px rgba(229,143,143,.16)}
 #bandbar{overflow-y:auto;min-height:0;scrollbar-width:thin}
+#strips .strip.dls{flex:0 0 84px}
 /* --- halaman DLMS --- */
 #pg-dlms.dlmsoff .dlmsbody{opacity:.38;pointer-events:none}
 .dlmsgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
@@ -1707,7 +1720,7 @@ function fillStrips(){
   const w=$('strips');w.innerHTML='';
   if(tab=='dlms'&&S.dlms&&S.dlms.ch){
     S.dlms.ch.forEach((h,c)=>{
-      const d=document.createElement('div');d.className='strip'+(h.on?'':' off');
+      const d=document.createElement('div');d.className='strip dls'+(h.on?'':' off');
       d.innerHTML=`<div class="scrib" style="background:${DCOL[c]}">${c==0?'L':'R'}</div><div class="val">${(+h.gain).toFixed(1)}</div>`;
       const f=document.createElement('input');f.type='range';f.className='vfader';f.id='sf'+c;f.min=-60;f.max=12;f.step=0.5;f.value=h.gain;
       f.oninput=()=>{h.gain=+f.value;d.querySelector('.val').textContent=h.gain.toFixed(1);const cs=$('d'+c+'_gain');if(cs){cs.value=h.gain;$('d'+c+'_gainV').textContent=h.gain.toFixed(1)+' dB';}sendSoon({['c'+c+'_gain']:h.gain});draw();};
