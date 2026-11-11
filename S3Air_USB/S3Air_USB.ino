@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.0.4 S3 Air"
+#define FW_VERSION "v5.0.5 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -838,9 +838,13 @@ static bool loadUserPreset(int slot) {
 }
 
 static void saveDlmsNvs() {
+  Serial0.println("[dbg] NVS simpan: mulai");
   prefs.begin("mbahdac2", false);
+  Serial0.println("[dbg] NVS simpan: begin ok");
   prefs.putBytes("dlms2", &dlms, sizeof(dlms));
+  Serial0.println("[dbg] NVS simpan: putBytes ok");
   prefs.end();
+  Serial0.println("[dbg] NVS simpan: selesai");
 }
 static void loadDlmsNvs() {
   prefs.begin("mbahdac2", true);
@@ -1965,8 +1969,10 @@ static void setupWeb() {
     if (has("volMax")) params.volMax = constrain(f("volMax"), 0.2f, 1.0f);
     if (has("autoHr")) params.autoHeadroom = on("autoHr");
     if (has("clipReset")) clipCount = 0;
+    int dlmsHit = 0;
     for (int a = 0; a < server.args(); a++)
-      dlmsSetKey(server.argName(a), server.arg(a).toFloat(), server.arg(a) == "1");
+      if (dlmsSetKey(server.argName(a), server.arg(a).toFloat(), server.arg(a) == "1")) dlmsHit++;
+    if (dlmsHit) Serial0.printf("[dbg] set DLMS x%d diproses, on=%d\n", dlmsHit, dlms.on ? 1 : 0);
     if (coef) coefDirty = true;
     if (dyn) rebuildDynCoefs();
     server.send(200, "application/json", "{\"ok\":1}");
