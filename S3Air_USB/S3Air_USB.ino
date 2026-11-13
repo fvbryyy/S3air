@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.2.3 S3 Air"
+#define FW_VERSION "v5.2.4 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -2182,7 +2182,14 @@ static void setupWeb() {
                ",\"lrms\":" + String(meterRmsL, 3) + ",\"rrms\":" + String(meterRmsR, 3) +
                ",\"gr\":" + String(grMeterDb, 1) + ",\"clip\":" + String(clipCount) +
                ",\"dirty\":" + String((stateDirty || dlmsSaveDirty) ? 1 : 0) +
-               ",\"flt\":" + String(statFlush) + "}";
+               ",\"flt\":" + String(statFlush);
+    // v5.2.4 (optimalisasi polling): RTA ikut dalam respons meter — aplikasi
+    // cukup SATU panggilan 150 ms untuk meter + spektrum (dulu dua panggilan
+    // 200+150 ms bersaing di server satu-utas). rtaLevels memang selalu
+    // terpelihara oleh computeRTA(), jadi ini nyaris tanpa biaya.
+    j += ",\"rta\":[";
+    for (int i = 0; i < NUM_GEQ; i++) { if (i) j += ","; j += String(rtaLevels[i], 0); }
+    j += "]}";
     meterPeakL = meterPeakR = 0;
     server.send(200, "application/json", j);
   });
