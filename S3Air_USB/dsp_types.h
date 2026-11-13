@@ -100,7 +100,7 @@ struct DlmsCh {
   bool     peqOn;
   float    peq[3];      // gain dB @ 100 / 1k / 8k Hz, Q tetap 1.0, -12..+12
   float    gainDb;      // -60..+12
-  float    dlyMs;       // 0..20 ms
+  float    dlyMs;       // 0..80 ms (v5.2.3)
   float    limDb;       // ceiling limiter kanal, -24..0
   bool     pol;         // balik fase 180°
 };

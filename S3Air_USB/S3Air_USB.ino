@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.2.2 S3 Air"
+#define FW_VERSION "v5.2.3 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -92,8 +92,9 @@ static float smoothDlyL = 0, smoothDlyR = 0;
 static float smoothCeil = 1.0f;
 static float xfLpL = 0, xfLpR = 0;
 static const float SMOOTH_COEF = 0.002f;
-// Delay line 20 ms = 960 sampel @48k, sediakan 1024
-static float dlyBufL[1024], dlyBufR[1024];
+// Delay line bersama (reguler + kanal DLMS). v5.2.3: diperbesar ke 4096
+// sampel (85 ms) agar delay kanal DLMS bisa 0..80 ms; reguler tetap 0..20.
+static float dlyBufL[4096], dlyBufR[4096];
 static uint16_t dlyWr = 0;
 // DLMS: delay input maks 100 ms (4800 sampel) + penghalus khusus mode DLMS
 static float inDlyBufA[4800], inDlyBufB[4800];
@@ -479,7 +480,7 @@ static bool dlmsSetKeyImpl(const String &k, float v, bool b) {
     else if (f == "p1") h.peq[1] = constrain(v, -12.0f, 12.0f);
     else if (f == "p2") h.peq[2] = constrain(v, -12.0f, 12.0f);
     else if (f == "gain") h.gainDb = constrain(v, -60.0f, 12.0f);
-    else if (f == "dly") h.dlyMs = constrain(v, 0.0f, 20.0f);
+    else if (f == "dly") h.dlyMs = constrain(v, 0.0f, 80.0f);
     else if (f == "lim") h.limDb = constrain(v, -24.0f, 0.0f);
     else if (f == "pol") h.pol = b;
     else return false;
@@ -684,8 +685,8 @@ static void processBlock(int16_t *s, int frames) {
       }
       uint16_t dd0 = (uint16_t)(smChDly[0] * 48.0f), dd1 = (uint16_t)(smChDly[1] * 48.0f);
       dlyBufL[dlyWr] = xs[0]; dlyBufR[dlyWr] = xs[1];
-      L = dlyRead(dlyBufL, dlyWr, tapCh0, dd0, 1024); R = dlyRead(dlyBufR, dlyWr, tapCh1, dd1, 1024);
-      dlyWr = (dlyWr + 1) & 1023;
+      L = dlyRead(dlyBufL, dlyWr, tapCh0, dd0, 4096); R = dlyRead(dlyBufR, dlyWr, tapCh1, dd1, 4096);
+      dlyWr = (dlyWr + 1) & 4095;
       // Limiter kanal DLMS = PEAK LIMITER beneran (gain-riding) sejak
       // v5.2.2. Dulu saturator tanh mentah c*tanhf(x/c) TANPA oversampling:
       // gelombang diukir ulang, harmoniknya aliasing jadi bunyi NOISE —
@@ -769,8 +770,8 @@ static void processBlock(int16_t *s, int frames) {
 
     uint16_t dlyL = (uint16_t)(smoothDlyL * 48.0f), dlyR = (uint16_t)(smoothDlyR * 48.0f);
     dlyBufL[dlyWr] = L; dlyBufR[dlyWr] = R;
-    L = dlyRead(dlyBufL, dlyWr, tapRegL, dlyL, 1024); R = dlyRead(dlyBufR, dlyWr, tapRegR, dlyR, 1024);
-    dlyWr = (dlyWr + 1) & 1023;
+    L = dlyRead(dlyBufL, dlyWr, tapRegL, dlyL, 4096); R = dlyRead(dlyBufR, dlyWr, tapRegR, dlyR, 4096);
+    dlyWr = (dlyWr + 1) & 4095;
 
     L *= smoothVol; R *= smoothVol;
     if (params.limiterOn) {
@@ -1527,7 +1528,7 @@ input[type=range]{accent-color:#22d3ee}
       <div class="drow"><label>TIPE</label><select class="dtf" id="d0_tf"><option value="0">LR12</option><option value="1" selected>LR24</option><option value="2">LR48</option><option value="3">BW12</option><option value="4">BW24</option><option value="5">BW48</option></select></div>
       <div class="drow"><label>PEQ</label><button class="tgl" id="d0_peqOn">ON</button><div class="peq3"><div class="pq"><input type="range" id="d0_p0" min="-12" max="12" step="0.5" value="0"><span id="d0_p0v">100 · 0.0</span></div><div class="pq"><input type="range" id="d0_p1" min="-12" max="12" step="0.5" value="0"><span id="d0_p1v">1000 · 0.0</span></div><div class="pq"><input type="range" id="d0_p2" min="-12" max="12" step="0.5" value="0"><span id="d0_p2v">8000 · 0.0</span></div></div></div>
       <div class="drow"><label>GAIN</label><input type="range" id="d0_gain" min="-60" max="12" step="0.5" value="0"><span class="val" id="d0_gainV">0.0 dB</span></div>
-      <div class="drow"><label>DELAY</label><input type="range" id="d0_dly" min="0" max="20" step="0.1" value="0"><span class="val" id="d0_dlyV">0.0 ms</span></div>
+      <div class="drow"><label>DELAY</label><input type="range" id="d0_dly" min="0" max="80" step="0.1" value="0"><span class="val" id="d0_dlyV">0.0 ms</span></div>
       <div class="drow"><label>LIMITER</label><input type="range" id="d0_lim" min="-24" max="0" step="0.5" value="-3"><span class="val" id="d0_limV">-3.0 dB</span></div>
       <div class="drow"><label>FASE</label><button class="tgl" id="d0_pol">0°</button></div>
     </div>
@@ -1539,7 +1540,7 @@ input[type=range]{accent-color:#22d3ee}
       <div class="drow"><label>TIPE</label><select class="dtf" id="d1_tf"><option value="0">LR12</option><option value="1" selected>LR24</option><option value="2">LR48</option><option value="3">BW12</option><option value="4">BW24</option><option value="5">BW48</option></select></div>
       <div class="drow"><label>PEQ</label><button class="tgl" id="d1_peqOn">ON</button><div class="peq3"><div class="pq"><input type="range" id="d1_p0" min="-12" max="12" step="0.5" value="0"><span id="d1_p0v">100 · 0.0</span></div><div class="pq"><input type="range" id="d1_p1" min="-12" max="12" step="0.5" value="0"><span id="d1_p1v">1000 · 0.0</span></div><div class="pq"><input type="range" id="d1_p2" min="-12" max="12" step="0.5" value="0"><span id="d1_p2v">8000 · 0.0</span></div></div></div>
       <div class="drow"><label>GAIN</label><input type="range" id="d1_gain" min="-60" max="12" step="0.5" value="0"><span class="val" id="d1_gainV">0.0 dB</span></div>
-      <div class="drow"><label>DELAY</label><input type="range" id="d1_dly" min="0" max="20" step="0.1" value="0"><span class="val" id="d1_dlyV">0.0 ms</span></div>
+      <div class="drow"><label>DELAY</label><input type="range" id="d1_dly" min="0" max="80" step="0.1" value="0"><span class="val" id="d1_dlyV">0.0 ms</span></div>
       <div class="drow"><label>LIMITER</label><input type="range" id="d1_lim" min="-24" max="0" step="0.5" value="-1"><span class="val" id="d1_limV">-1.0 dB</span></div>
       <div class="drow"><label>FASE</label><button class="tgl" id="d1_pol">0°</button></div>
     </div>
