@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.2 S3 Air"
+#define FW_VERSION "v5.2.1 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -1064,6 +1064,7 @@ static void wifiPoll() {
     if (!wasConnected) {
       wasConnected = true;
       Serial0.printf("[WiFi] Tersambung: %s — panel di http://%s.local\n", WiFi.localIP().toString().c_str(), DAC_HOSTNAME);
+      server.enableCORS(true);  // aplikasi web (Flutter Web) boleh membaca API dari origin lain
       server.begin();
       if (MDNS.begin(DAC_HOSTNAME)) mdnsOn = true;
     }
