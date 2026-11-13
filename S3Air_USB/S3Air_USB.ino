@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.2.1 S3 Air"
+#define FW_VERSION "v5.2.2 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -100,6 +100,7 @@ static float inDlyBufA[4800], inDlyBufB[4800];
 static uint16_t inDlyWr = 0;
 static float smInGainA = 1.0f, smInGainB = 1.0f;
 static float smChGain[2] = {1.0f, 1.0f}, smChCeil[2] = {1.0f, 1.0f};
+static float limEnv[2] = {0.0f, 0.0f}, limGainSm[2] = {1.0f, 1.0f}; // state peak-limiter kanal DLMS (v5.2.2)
 static float smChDly[2] = {0, 0}, smInDlyA = 0, smInDlyB = 0;
 // Tangkap sampel untuk RTA (mono mix, ring 1024)
 static float rtaBuf[1024];
@@ -685,8 +686,32 @@ static void processBlock(int16_t *s, int frames) {
       dlyBufL[dlyWr] = xs[0]; dlyBufR[dlyWr] = xs[1];
       L = dlyRead(dlyBufL, dlyWr, tapCh0, dd0, 1024); R = dlyRead(dlyBufR, dlyWr, tapCh1, dd1, 1024);
       dlyWr = (dlyWr + 1) & 1023;
-      L = smChCeil[0] * tanhf(L / (smChCeil[0] + 1e-9f));
-      R = smChCeil[1] * tanhf(R / (smChCeil[1] + 1e-9f));
+      // Limiter kanal DLMS = PEAK LIMITER beneran (gain-riding) sejak
+      // v5.2.2. Dulu saturator tanh mentah c*tanhf(x/c) TANPA oversampling:
+      // gelombang diukir ulang, harmoniknya aliasing jadi bunyi NOISE —
+      // makin rendah ambang, makin dalam saturasi, makin noise (laporan
+      // user 2026-11-13 19:57). Apalagi limiter ini duduk SEBELUM volume
+      // master dan memakan sinyal yang sudah di-boost gain kanal. Peak
+      // limiter hanya menurunkan gain sesaat bila puncak melewati ambang:
+      // bentuk gelombang utuh, tanpa harmonik baru. Per sampel hanya
+      // fabsf + mul-add (tanpa transendental), koefisien konstanta:
+      // detektor attack ~0,1 ms / release ~120 ms; gain turun cepat,
+      // naik pelan ~60 ms.
+      {
+        float xs2[2] = {L, R};
+        for (int c = 0; c < 2; c++) {
+          float det = fabsf(xs2[c]);
+          float e = limEnv[c];
+          e += (det - e) * (det > e ? 0.19f : 0.000174f);
+          limEnv[c] = e;
+          float g = e > smChCeil[c] ? smChCeil[c] / e : 1.0f;
+          float gs = limGainSm[c];
+          gs += (g - gs) * (g < gs ? 0.5f : 0.000347f);
+          limGainSm[c] = gs;
+          xs2[c] *= gs;
+        }
+        L = xs2[0]; R = xs2[1];
+      }
       L *= dipMul; R *= dipMul;
       L *= smoothVol; R *= smoothVol;
     } else {
