@@ -30,7 +30,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.0.8 S3 Air"
+#define FW_VERSION "v5.2 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -52,8 +52,29 @@ static BiquadCoef  geqBank[2][NUM_GEQ];
 static BiquadState geqState[NUM_GEQ];
 static volatile uint8_t activeBank = 0;
 static volatile bool coefDirty = true;
-static volatile uint16_t xfadeRemain = 0;
-static const uint16_t XFADE_LEN = 24;
+// Celup transisi dua fase (v5.1 tahap 3): turun smoothstep 2,5 ms -> tahan
+// di nol sampai koefisien tertukar -> naik smoothstep 2,5 ms. Menggantikan
+// celup satu arah 24 sampel v5.0 yang masih menyisakan tepi tajam.
+static const uint16_t DIP_HALF = 120;
+static uint16_t dipRemain = 0;
+static uint8_t dipPhase = 0;        // 0 diam, 1 turun, 3 tahan-di-nol, 2 naik
+static bool dipDoSwap = false;
+// Crossfade tap delay: tiap tap bergeser, dua tap (lama+baru) dibaca dan
+// dicampur 5 ms — membunuh bunyi "ciitt"/klik saat delay digeser/dipindah.
+struct DlyTap { uint16_t cur = 0, from = 0, fade = 0; };
+static const uint16_t DLY_XFADE = 240;
+static DlyTap tapInA, tapInB, tapCh0, tapCh1, tapRegL, tapRegR;
+static inline float dlyRead(const float *buf, uint16_t wr, DlyTap &t, uint16_t target, uint16_t size) {
+  if (target != t.cur) { t.from = t.cur; t.cur = target; t.fade = DLY_XFADE; }
+  float y = buf[(wr + size - t.cur) % size];
+  if (t.fade) {
+    float g = 1.0f - (float)t.fade / (float)DLY_XFADE;
+    float yo = buf[(wr + size - t.from) % size];
+    y += (yo - y) * (1.0f - g);
+    t.fade--;
+  }
+  return y;
+}
 
 // Keadaan dinamika & output (jalan di callback audio)
 static float gateEnv = 0, gateGain = 1;
@@ -339,6 +360,11 @@ static float bDlmsHpfF[2] = {-1, -1}, bDlmsLpfF[2] = {-1, -1};
 static float bDlmsPeq[2][3] = {};
 static uint16_t bDlmsBits[2] = {0xFFFF, 0xFFFF};
 static volatile bool dlmsSaveDirty = false;
+static volatile bool stateDirty = false;   // ada perubahan state belum tersimpan (reguler/DLMS)
+static bool sysAutoSave = true;            // toggle auto-save (tersimpan di NVS "autosave")
+static uint32_t lastChangeMs = 0;          // kapan perubahan terakhir (debounce simpan)
+static uint32_t lastStateSave = 0;         // kapan simpan terakhir
+static bool serActed = false;              // penanda aksi (simpan/reset) dari serial
 static volatile bool dlmsTouched = true;  // ada setelan DLMS baru: task audio menyiapkan koefisiennya sekali
 
 static void setDlmsDefaults() {
@@ -471,13 +497,52 @@ static bool dlmsSetKey(const String &k, float v, bool b) {
 //  RTOS: ring SPSC — callback USB ringan, DSP di task khusus Core 1
 // ============================================================
 #define RING_FRAMES 4096
-static int16_t ringIn[RING_FRAMES * 2], ringOut[RING_FRAMES * 2];
+static int16_t ringIn[RING_FRAMES * 2];
+static int32_t ringOut[RING_FRAMES * 2];   // v5.1: keluaran 24-bit rata-kiri dalam kata 32-bit
 static volatile uint32_t ringInW = 0, ringInR = 0, ringOutW = 0, ringOutR = 0;
 static volatile uint32_t statUnderrun = 0, statOverflow = 0;
 static TaskHandle_t dspTaskHandle = NULL;
 static int16_t dspBlock[512 * 2];
+static int32_t dspOut[512 * 2];
+
+// --- Kuantisasi keluaran 24-bit + dither TPDF (v5.1 tahap 2) ---
+// Slot I2S 32-bit (PCM5102 menerima bingkai 32-bit); data 24-bit rata-kiri.
+// Dither segitiga +-1 LSB24 dari xorshift32 — tanpa transendental per sampel.
+static uint32_t dithState = 0x2545F491u;
+static inline float dithU() {
+  dithState ^= dithState << 13; dithState ^= dithState >> 17; dithState ^= dithState << 5;
+  return (float)(dithState >> 8) * (1.0f / 16777216.0f);
+}
+static inline int32_t quant24(float v) {
+  float q = v * 8388608.0f + (dithU() - dithU());
+  if (q > 8388607.0f) q = 8388607.0f;
+  else if (q < -8388608.0f) q = -8388608.0f;
+  int32_t iv = (int32_t)(q >= 0.0f ? q + 0.5f : q - 0.5f);
+  return iv << 8;
+}
+
+// --- Lapisan gagal-diam (v5.1 tahap 4) ---
+static volatile uint32_t dspHeartbeat = 0;    // detak tugas DSP untuk pengawas
+static volatile uint32_t lastSpkMs = 0;       // kapan callback USB terakhir jalan
+static volatile bool stateFlushNeeded = false;
+static volatile uint32_t statFlush = 0;
+static float dcxL = 0, dcyL = 0, dcxR = 0, dcyR = 0;  // state penahan DC keluaran
+static uint32_t bootRamp = 0;                 // ramp naik 50 ms pertama (dalam sampel)
+static void flushDspStates() {
+  memset(mainState, 0, sizeof(mainState));
+  memset(geqState, 0, sizeof(geqState));
+  memset(dlmsState, 0, sizeof(dlmsState));
+  memset(dynState, 0, sizeof(dynState));
+  memset(dynEnv, 0, sizeof(dynEnv));
+  memset(dlyBufL, 0, sizeof(dlyBufL)); memset(dlyBufR, 0, sizeof(dlyBufR));
+  memset(inDlyBufA, 0, sizeof(inDlyBufA)); memset(inDlyBufB, 0, sizeof(inDlyBufB));
+  gateEnv = 0; gateGain = 1; compEnv = 0; xfLpL = xfLpR = 0;
+  dcxL = dcyL = dcxR = dcyR = 0;
+  statFlush++;
+}
 
 static void processBlock(int16_t *s, int frames) {
+  if (stateFlushNeeded) { stateFlushNeeded = false; flushDspStates(); }
   BiquadCoef *mb = mainBank[activeBank];
   BiquadCoef *gb = geqBank[activeBank];
 
@@ -576,11 +641,27 @@ static void processBlock(int16_t *s, int frames) {
         if (dlmsChanged()) rebuildDlmsCoefs();
         if (!dlms.on) dlmsTouched = false;
       }
-      if (filtersChanged()) {
+      if (dipDoSwap) {
         rebuildCoefficients();
         mb = mainBank[activeBank]; gb = geqBank[activeBank];
-        if (armDip) { xfadeRemain = XFADE_LEN; armDip = false; }
+        dipDoSwap = false; dipPhase = 2; dipRemain = DIP_HALF;
+      } else if (filtersChanged()) {
+        if (armDip && dipPhase == 0) { dipPhase = 1; dipRemain = DIP_HALF; armDip = false; }
+        else if (!armDip && dipPhase != 1 && dipPhase != 3) { rebuildCoefficients(); mb = mainBank[activeBank]; gb = geqBank[activeBank]; }
       }
+    }
+
+    float dipMul = 1.0f;
+    if (dipPhase == 1) {
+      float t = 1.0f - (float)dipRemain / (float)DIP_HALF;
+      dipMul = 1.0f - t * t * (3.0f - 2.0f * t);
+      if (--dipRemain == 0) { dipPhase = 3; dipDoSwap = true; }
+    } else if (dipPhase == 3) {
+      dipMul = 0.0f;
+    } else if (dipPhase == 2) {
+      float t = 1.0f - (float)dipRemain / (float)DIP_HALF;
+      dipMul = t * t * (3.0f - 2.0f * t);
+      if (--dipRemain == 0) dipPhase = 0;
     }
 
     float L = s[2 * n] * (1.0f / 32768.0f), R = s[2 * n + 1] * (1.0f / 32768.0f);
@@ -590,8 +671,8 @@ static void processBlock(int16_t *s, int frames) {
       float a = L * smInGainA, b = R * smInGainB;
       inDlyBufA[inDlyWr] = a; inDlyBufB[inDlyWr] = b;
       uint16_t dA = (uint16_t)(smInDlyA * 48.0f), dB = (uint16_t)(smInDlyB * 48.0f);
-      a = inDlyBufA[(inDlyWr + 4800 - dA) % 4800];
-      b = inDlyBufB[(inDlyWr + 4800 - dB) % 4800];
+      a = dlyRead(inDlyBufA, inDlyWr, tapInA, dA, 4800);
+      b = dlyRead(inDlyBufB, inDlyWr, tapInB, dB, 4800);
       inDlyWr = (inDlyWr + 1) % 4800;
       float xs[2];
       for (int c = 0; c < 2; c++) {
@@ -602,15 +683,11 @@ static void processBlock(int16_t *s, int frames) {
       }
       uint16_t dd0 = (uint16_t)(smChDly[0] * 48.0f), dd1 = (uint16_t)(smChDly[1] * 48.0f);
       dlyBufL[dlyWr] = xs[0]; dlyBufR[dlyWr] = xs[1];
-      L = dlyBufL[(dlyWr - dd0) & 1023]; R = dlyBufR[(dlyWr - dd1) & 1023];
+      L = dlyRead(dlyBufL, dlyWr, tapCh0, dd0, 1024); R = dlyRead(dlyBufR, dlyWr, tapCh1, dd1, 1024);
       dlyWr = (dlyWr + 1) & 1023;
       L = smChCeil[0] * tanhf(L / (smChCeil[0] + 1e-9f));
       R = smChCeil[1] * tanhf(R / (smChCeil[1] + 1e-9f));
-      if (xfadeRemain > 0) {
-        float fade = (float)xfadeRemain / (float)XFADE_LEN;
-        L *= (1.0f - fade); R *= (1.0f - fade);
-        xfadeRemain--;
-      }
+      L *= dipMul; R *= dipMul;
       L *= smoothVol; R *= smoothVol;
     } else {
     L *= smoothPreamp * smoothTrimL; R *= smoothPreamp * smoothTrimR;
@@ -633,12 +710,7 @@ static void processBlock(int16_t *s, int frames) {
     L = runBiquad(mb[14], mainState[14], L, true); R = runBiquad(mb[14], mainState[14], R, false);
     L = runBiquad(mb[15], mainState[15], L, true); R = runBiquad(mb[15], mainState[15], R, false);
 
-    if (xfadeRemain > 0) {
-      float fade = (float)xfadeRemain / (float)XFADE_LEN;
-      L *= (1.0f - fade);
-      R *= (1.0f - fade);
-      xfadeRemain--;
-    }
+    L *= dipMul; R *= dipMul;
 
     float det = fmaxf(fabsf(L), fabsf(R));
     if (params.gateOn) {
@@ -672,7 +744,7 @@ static void processBlock(int16_t *s, int frames) {
 
     uint16_t dlyL = (uint16_t)(smoothDlyL * 48.0f), dlyR = (uint16_t)(smoothDlyR * 48.0f);
     dlyBufL[dlyWr] = L; dlyBufR[dlyWr] = R;
-    L = dlyBufL[(dlyWr - dlyL) & 1023]; R = dlyBufR[(dlyWr - dlyR) & 1023];
+    L = dlyRead(dlyBufL, dlyWr, tapRegL, dlyL, 1024); R = dlyRead(dlyBufR, dlyWr, tapRegR, dlyR, 1024);
     dlyWr = (dlyWr + 1) & 1023;
 
     L *= smoothVol; R *= smoothVol;
@@ -689,9 +761,17 @@ static void processBlock(int16_t *s, int frames) {
     if (aL >= 0.999f || aR >= 0.999f) clipCount++;
     rtaBuf[rtaWr] = (L + R) * 0.5f; rtaWr = (rtaWr + 1) & 1023;
 
-    float oL = constrain(L, -1.0f, 1.0f), oR = constrain(R, -1.0f, 1.0f);
-    s[2 * n] = (int16_t)(oL * 32767.0f);
-    s[2 * n + 1] = (int16_t)(oR * 32767.0f);
+    // sanitasi akhir: NaN/Inf -> nol + minta flush state; penahan DC ~3 Hz;
+    // jepit keras; ramp boot 50 ms. Prinsipnya: gagal = diam.
+    float oL = L, oR = R;
+    if (!isfinite(oL) || !isfinite(oR)) { oL = 0.0f; oR = 0.0f; stateFlushNeeded = true; }
+    float yL = oL - dcxL + 0.99961f * dcyL; dcxL = oL; dcyL = yL; oL = yL;
+    float yR = oR - dcxR + 0.99961f * dcyR; dcxR = oR; dcyR = yR; oR = yR;
+    oL = constrain(oL, -1.0f, 1.0f); oR = constrain(oR, -1.0f, 1.0f);
+    float bootMul = 1.0f;
+    if (bootRamp < 2400) bootMul = (float)(bootRamp++) * (1.0f / 2400.0f);
+    dspOut[2 * n] = quant24(oL * bootMul);
+    dspOut[2 * n + 1] = quant24(oR * bootMul);
   }
   if (frames > 0) {
     meterRmsL = sqrtf(sumL / frames); meterRmsR = sqrtf(sumR / frames);
@@ -699,6 +779,7 @@ static void processBlock(int16_t *s, int frames) {
 }
 
 static void onSpkData(void *data, uint16_t len) {
+  lastSpkMs = millis();
   uac.applyVolume(data, len);
   int16_t *s = (int16_t *)data;
   int frames = len / 4;
@@ -710,18 +791,20 @@ static void onSpkData(void *data, uint16_t len) {
     ringIn[idx * 2] = s[n * 2]; ringIn[idx * 2 + 1] = s[n * 2 + 1];
   }
   ringInW = w;
-  // tarik hasil olahan dari ringOut (hening + hitung underrun bila kurang)
+  // tarik hasil olahan 24-bit dari ringOut ke buffer kirim I2S (kata 32-bit)
+  static int32_t i2sTx[1024 * 2];
+  int txFrames = frames > 1024 ? 1024 : frames;
   uint32_t r = ringOutR;
   uint32_t avail = ringOutW - r;
-  for (int n = 0; n < frames; n++) {
+  for (int n = 0; n < txFrames; n++) {
     if (n < (int)avail) {
       uint32_t idx = (r + n) & (RING_FRAMES - 1);
-      s[n * 2] = ringOut[idx * 2]; s[n * 2 + 1] = ringOut[idx * 2 + 1];
-    } else { s[n * 2] = 0; s[n * 2 + 1] = 0; statUnderrun++; }
+      i2sTx[n * 2] = ringOut[idx * 2]; i2sTx[n * 2 + 1] = ringOut[idx * 2 + 1];
+    } else { i2sTx[n * 2] = 0; i2sTx[n * 2 + 1] = 0; statUnderrun++; }
   }
-  ringOutR = r + (frames < (int)avail ? frames : (int)avail);
+  ringOutR = r + (txFrames < (int)avail ? txFrames : (int)avail);
   if (dspTaskHandle && (ringInW - ringInR) >= 64) xTaskNotifyGive(dspTaskHandle);
-  i2s.write((uint8_t *)data, len);
+  i2s.write((uint8_t *)i2sTx, txFrames * 8);
 }
 
 // Uji mandiri diagnostik (serial: dlmstest=1) — ukur waktu proses per fase sinyal.
@@ -760,6 +843,7 @@ static void dlmsSelfTest() {
 static void dspTask(void *arg) {
   (void)arg;
   for (;;) {
+    dspHeartbeat++;
     uint32_t avail = ringInW - ringInR;
     if (avail < 64) {
       ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
@@ -779,7 +863,7 @@ static void dspTask(void *arg) {
     int m = n < (int)space ? n : (int)space;
     for (int i = 0; i < m; i++) {
       uint32_t idx = (w + i) & (RING_FRAMES - 1);
-      ringOut[idx * 2] = dspBlock[i * 2]; ringOut[idx * 2 + 1] = dspBlock[i * 2 + 1];
+      ringOut[idx * 2] = dspOut[i * 2]; ringOut[idx * 2 + 1] = dspOut[i * 2 + 1];
     }
     ringOutW = w + m;
   }
@@ -788,7 +872,8 @@ static void dspTask(void *arg) {
 
 static void setupAudio() {
   i2s.setPins(PIN_BCK, PIN_LRCK, PIN_DIN, -1);
-  i2s.begin(I2S_MODE_STD, 48000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH);
+  // v5.1: slot 32-bit membawa data 24-bit rata-kiri + dither (lihat quant24).
+  i2s.begin(I2S_MODE_STD, 48000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH);
   // Identitas USB sendiri (nama tampil di Windows sebagai perangkat audio).
   // WAJIB tanpa CDC (CDCOnBoot Disabled di menu IDE) — lihat catatan di atas.
   USB.productName("MbahDAC USB");
@@ -890,6 +975,58 @@ static void loadDlmsNvs() {
   size_t r = prefs.getBytes("dlms2", &tmp, sizeof(tmp));
   prefs.end();
   if (r == sizeof(tmp)) dlms = tmp;
+}
+static void saveStateNvs() {
+  prefs.begin("mbahdac2", false);
+  prefs.putBytes("state", &params, sizeof(params));
+  prefs.putBytes("dlms2", &dlms, sizeof(dlms));
+  prefs.end();
+  stateDirty = false; dlmsSaveDirty = false;
+}
+static bool loadStateNvs() {
+  prefs.begin("mbahdac2", true);
+  DspParams tmp;
+  size_t r = prefs.getBytes("state", &tmp, sizeof(tmp));
+  prefs.end();
+  if (r != sizeof(tmp)) return false;
+  params = tmp;
+  return true;
+}
+static void loadSysPrefs() {
+  prefs.begin("mbahdac2", true);
+  sysAutoSave = prefs.getBool("autosave", true);
+  prefs.end();
+}
+static void softResetNow() {
+  setFlat(params);
+  setDlmsDefaults(); dlms.on = false;
+  snapSmoothToParams(); snapDlmsSmooth();
+  rebuildCoefficients(); rebuildDlmsCoefs(); rebuildDynCoefs();
+  coefDirty = true;
+  saveStateNvs();
+}
+static void factoryResetNow() {
+  // Hapus seluruh state audio + preset; kredensial WiFi panel DIPERTAHANKAN
+  // (identitas jaringan bukan urusan reset setelan; fallback-nya header bila kosong).
+  String ssid, pass;
+  prefs.begin("mbahdac2", true);
+  ssid = prefs.getString("ssid", ""); pass = prefs.getString("pass", "");
+  prefs.end();
+  prefs.begin("mbahdac2", false);
+  prefs.clear();
+  if (ssid.length()) { prefs.putString("ssid", ssid); prefs.putString("pass", pass); }
+  prefs.end();
+  delay(300);
+  ESP.restart();
+}
+static void bootBtnPoll() {
+  // Reset pabrik fisik: tahan BOOT (GPIO0) >= 2,5 detik dalam 6 detik pertama setelah boot.
+  static uint32_t lowSince = 0;
+  if (millis() > 6000) return;
+  if (digitalRead(0) == LOW) {
+    if (!lowSince) lowSince = millis();
+    else if (millis() - lowSince > 2500) factoryResetNow();
+  } else lowSince = 0;
 }
 static bool userPresetExists(int slot) {
   char key[8]; snprintf(key, sizeof(key), "u%d", slot);
@@ -994,6 +1131,7 @@ static String stateJson() {
   j += ",\"volMax\":" + String(params.volMax, 2) + ",\"autoHr\":" + String(params.autoHeadroom ? 1 : 0);
   j += ",\"eqPeak\":" + String(estimateEqPeakDb(), 1);
   j += dlmsJson();
+  j += ",\"dirty\":" + String((stateDirty || dlmsSaveDirty) ? 1 : 0) + ",\"autosave\":" + String(sysAutoSave ? 1 : 0);
   j += ",\"slots\":[";
   for (int i = 0; i < NUM_USER_PRESETS; i++) { if (i) j += ","; j += String(userPresetExists(i) ? 1 : 0); }
   j += "]}";
@@ -1026,6 +1164,8 @@ input,select{font-family:inherit}
 .tabbtn.act svg{stroke:var(--teal)}
 #topright{margin-left:auto;display:flex;align-items:center;gap:8px}
 #netpill{background:#0d2b30;color:#7fe3f0;border:1px solid var(--teal2);border-radius:3px;padding:4px 8px;font-size:11px}
+#savedot{width:9px;height:9px;border-radius:50%;background:#e8a33d;display:inline-block;margin-right:6px;opacity:0;transition:opacity .3s;vertical-align:middle}
+#saveBtn{margin-right:8px}
 #cliplamp{background:#2a0f0f;color:#ff8787;border:1px solid #5c1a1a;border-radius:3px;padding:4px 8px;font-size:11px}
 #cliplamp b{font-family:var(--mono)}
 /* ===== work area ===== */
@@ -1237,7 +1377,7 @@ input[type=range]{accent-color:#22d3ee}
   <button class="tabbtn" data-tab="preset"><svg viewBox="0 0 24 24"><path d="M4 4 h13 l3 3 v13 H4 z"/><path d="M7 4 v5 h9 V4 M7 20 v-6 h10 v6"/></svg>Preset</button>
   <button class="tabbtn" data-tab="sys"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2 v4 M12 18 v4 M2 12 h4 M18 12 h4"/></svg>Sistem</button>
   <button class="tabbtn" data-tab="dlms"><svg viewBox="0 0 24 24"><path d="M4 20 V10 M12 20 V4 M20 20 V13"/></svg>DLMS</button>
-  <div id="topright"><span id="netpill">WiFi: ...</span><span id="cliplamp">CLIP <b id="clipct">0</b></span></div>
+  <div id="topright"><span id="savedot" title="Ada perubahan belum tersimpan"></span><button class="tgl" id="saveBtn">SIMPAN</button><span id="netpill">WiFi: ...</span><span id="cliplamp">CLIP <b id="clipct">0</b></span></div>
 </div>
 
 <div id="work">
@@ -1328,6 +1468,14 @@ input[type=range]{accent-color:#22d3ee}
           <tr><td>Ring Buffer DSP</td><td id="ringinfo">—</td></tr>
           <tr><td>Puncak EQ</td><td id="eqpeak">—</td></tr>
         </table>
+        <div class="mrow" style="justify-content:flex-start;gap:6px;margin:10px 0 4px">
+          <button class="tgl" id="autoSaveTgl">AUTO-SAVE</button><span class="note">Simpan otomatis ±2 detik setelah perubahan terakhir. Tombol SIMPAN di atas menyimpan seketika.</span>
+        </div>
+        <div class="mrow" style="justify-content:flex-start;gap:6px;margin:4px 0">
+          <button class="tgl" id="resetSoft">Reset Setelan</button>
+          <button class="tgl red" id="resetFactory">Reset Pabrik</button>
+          <span class="note">Reset Setelan: parameter kembali bawaan (preset user utuh). Reset Pabrik: semua simpanan dihapus.</span>
+        </div>
         <div class="wform">
           <input type="text" id="ssid" placeholder="SSID WiFi baru">
           <input type="password" id="wpass" placeholder="Password WiFi baru">
@@ -1500,7 +1648,7 @@ let S=null, tab='eq', sel=0, RT=new Array(31).fill(-60), RTs=new Array(31).fill(
 const BCOL=['#5ec2d6','#7db8f0','#8ad99a','#f2d06b','#f5b97f','#ef8fb5','#c3aef2','#f49a9a','#7fe0c3','#d3a6ec'];
 const GEQF=[20,25,31.5,40,50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000,12500,16000,20000];
 const FS=48000;
-function send(o){return fetch('/api/set',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(o)}).catch(()=>{});}
+function send(o){const ks=Object.keys(o);if(ks.some(k=>!['saveState','autosave','resetSoft','resetFactory','clipReset'].includes(k)))dot(1);return fetch('/api/set',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(o)}).catch(()=>{});}
 function tgl(id,on){$(id).classList.toggle('on',!!on);}
 function fmtF(f){return f>=1000?((f/1000).toFixed(f>=10000?0:1).replace('.0','')+'k'):(''+Math.round(f));}
 function volDb(v){return v<=0.001?'-inf':(20*Math.log10(v)).toFixed(1);}
@@ -1556,22 +1704,22 @@ function dbForY(y,H){return (1-y/H)*30-15;}
 function draw(){
   if(!S)return;
   const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
-  ctx.fillStyle='#04070d';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#101216';ctx.fillRect(0,0,W,H);
   if(tab=='gate'||tab=='comp')return drawDyn(W,H);
   if(tab=='dlms')return drawDlms(W,H);
   // RTA
   const bw=W/31;
-  ctx.fillStyle='rgba(63,138,95,0.38)';
+  ctx.fillStyle='rgba(56,199,224,0.38)';
   for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(i*bw+1,H-v*H,bw-2,v*H);}
   // grid
-  ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
+  ctx.strokeStyle='#232830';ctx.fillStyle='#8a94a0';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
   [20,50,100,200,500,1000,2000,5000,10000,20000].forEach(f=>{const x=xFor(f,W);ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();ctx.fillText(fmtF(f),x+2,H-4);});
-  [12,6,0,-6,-12].forEach(db=>{const y=yFor(db,H);ctx.strokeStyle=db==0?'#27435f':'#182635';ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.fillStyle='#5f7d99';ctx.fillText((db>0?'+':'')+db,3,y-3);});
+  [12,6,0,-6,-12].forEach(db=>{const y=yFor(db,H);ctx.strokeStyle=db==0?'#2c3542':'#232830';ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.fillStyle='#5f7d99';ctx.fillText((db>0?'+':'')+db,3,y-3);});
   // kurva total
   const N=140;ctx.beginPath();
   for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,totalDb(f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}
-  ctx.strokeStyle='#3f8a5f';ctx.lineWidth=2.2;ctx.stroke();
-  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle='rgba(63,138,95,0.10)';ctx.fill();
+  ctx.strokeStyle='#38c7e0';ctx.lineWidth=2.2;ctx.stroke();
+  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle='rgba(56,199,224,0.10)';ctx.fill();
   // kurva band terpilih
   if(S.eqMode==0){const b=S.bands[sel];if(b.on){ctx.beginPath();for(let i=0;i<=N;i++){const f=20*Math.pow(1000,i/N),x=xFor(f,W),y=yFor(Math.max(-15,Math.min(15,respDb(coef(b.t,b.f,b.g,b.q),f))),H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.strokeStyle=BCOL[sel];ctx.lineWidth=1.2;ctx.stroke();}}
   // titik node
@@ -1582,16 +1730,16 @@ function draw(){
       ctx.fillStyle='#0a0a0a';ctx.font='bold 11px Arial';ctx.textAlign='center';ctx.fillText(i+1,x,y+4);ctx.textAlign='left';}
   }else{
     for(let i=0;i<31;i++){const x=xFor(GEQF[i],W),y=yFor(S.geq[i],H);
-      ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fillStyle='#3f8a5f';ctx.fill();ctx.strokeStyle='#111';ctx.stroke();}
+      ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fillStyle='#38c7e0';ctx.fill();ctx.strokeStyle='#111';ctx.stroke();}
   }
 }
 function drawDyn(W,H){
   const x0=40,x1=W-8,y0=8,y1=H-22;
   const X=v=>x0+(v+60)/60*(x1-x0), Y=v=>y0+(1-(v+60)/60)*(y1-y0);
   // RTA di belakang kurva transfer — spektrum tetap aktif di tab Gate/Comp
-  const bw=(x1-x0)/31;ctx.fillStyle='rgba(63,138,95,0.38)';
+  const bw=(x1-x0)/31;ctx.fillStyle='rgba(56,199,224,0.38)';
   for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(x0+i*bw+1,y1-v*(y1-y0),bw-2,v*(y1-y0));}
-  ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.font='10px Arial';
+  ctx.strokeStyle='#232830';ctx.fillStyle='#8a94a0';ctx.font='10px Arial';
   for(let v=-50;v<0;v+=10){ctx.beginPath();ctx.moveTo(X(v),y0);ctx.lineTo(X(v),y1);ctx.stroke();ctx.beginPath();ctx.moveTo(x0,Y(v));ctx.lineTo(x1,Y(v));ctx.stroke();ctx.fillText(v,X(v)-4,y1+12);ctx.fillText(v,6,Y(v)+3);}
   ctx.strokeStyle='#27435f';ctx.beginPath();ctx.moveTo(X(-60),Y(-60));ctx.lineTo(X(0),Y(0));ctx.stroke();
   ctx.beginPath();
@@ -1599,7 +1747,7 @@ function drawDyn(W,H){
     if(tab=='gate'){out=!S.gateOn?inn:(inn>S.gateThr?inn:-60);}
     else{out=inn;if(S.compOn&&inn>S.compThr)out=S.compThr+(inn-S.compThr)/Math.max(S.compRatio,1);out+=S.compOn?S.compMake:0;if(S.limiter)out=Math.min(out,S.ceiling);}
     out=Math.max(-60,Math.min(3,out));const px=X(inn),py=Y(out);i?ctx.lineTo(px,py):ctx.moveTo(px,py);}
-  ctx.strokeStyle='#3f8a5f';ctx.lineWidth=2.2;ctx.stroke();
+  ctx.strokeStyle='#38c7e0';ctx.lineWidth=2.2;ctx.stroke();
   if(tab=='comp'&&S.limiter){ctx.strokeStyle='#e03131';ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(x0,Y(S.ceiling));ctx.lineTo(x1,Y(S.ceiling));ctx.stroke();ctx.setLineDash([]);}
 }
 
@@ -1637,11 +1785,11 @@ function dlmsDb(ch,f){
   return d;
 }
 function drawDlms(W,H){
-  const bw=W/31;ctx.fillStyle='rgba(63,138,95,0.38)';
+  const bw=W/31;ctx.fillStyle='rgba(56,199,224,0.38)';
   for(let i=0;i<31;i++){const v=Math.min(Math.max((RTs[i]+60)/60,0),1);ctx.fillRect(i*bw+1,H-v*H,bw-2,v*H);}
-  ctx.strokeStyle='#182635';ctx.fillStyle='#5f7d99';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
+  ctx.strokeStyle='#232830';ctx.fillStyle='#8a94a0';ctx.lineWidth=1;ctx.font=`${Math.round(H*0.038)}px Arial`;
   [20,50,100,200,500,1000,2000,5000,10000,20000].forEach(f=>{const x=xFor(f,W);ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();ctx.fillText(fmtF(f),x+2,H-4);});
-  [12,6,0,-6,-12].forEach(db=>{const y=yFor(db,H);ctx.strokeStyle=db==0?'#27435f':'#182635';ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.fillStyle='#5f7d99';ctx.fillText((db>0?'+':'')+db,3,y-3);});
+  [12,6,0,-6,-12].forEach(db=>{const y=yFor(db,H);ctx.strokeStyle=db==0?'#2c3542':'#232830';ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.fillStyle='#5f7d99';ctx.fillText((db>0?'+':'')+db,3,y-3);});
   if(!S.dlms)return;
   [1,0].forEach(c=>{
     const ch=S.dlms.ch[c];if(!ch)return;
@@ -1804,6 +1952,7 @@ function fillEditor(){
   $('ed_q').value=b.q;$('ed_q_v').textContent=b.q.toFixed(1);
   tgl('ed_dyn',b.dyn);$('ed_dthr').value=b.dthr;$('ed_drng').value=b.drng;
 }
+function dot(on){const d=$('savedot');if(d)d.style.opacity=on?1:0;}
 function fillSlots(){
   const w=$('slots');w.innerHTML='';
   for(let i=0;i<10;i++){
@@ -1827,6 +1976,7 @@ function capture(){
 function fill(){
   $('netpill').textContent=S.net;$('netinfo').textContent=S.net+' · http://mbahdac.local';
   $('fwinfo').textContent='S3 Air '+S.fw;
+  dot(S.dirty); tgl('autoSaveTgl',S.autosave);
   $('ringinfo').textContent='underrun '+S.ur+' · overflow '+S.ov;
   $('eqpeak').textContent=(S.eqPeak>=0?'+':'')+S.eqPeak+' dB';
   $('pre').value=S.preamp;$('pre_v').textContent=S.preamp.toFixed(1)+' dB';
@@ -1916,13 +2066,17 @@ function bind(){
   const doClip=()=>send({clipReset:1});
   $('clipResetBtn').onclick=doClip;
   $('wifiBtn').onclick=()=>{if(confirm('Alat restart dan gabung WiFi rumah dengan data baru. Lanjut?'))fetch('/api/wifi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({ssid:$('ssid').value,pass:$('wpass').value})});};
+  $('saveBtn').onclick=async()=>{await send({saveState:1});dot(0);const b=$('saveBtn');const t=b.textContent;b.textContent='TERSIMPAN';setTimeout(()=>b.textContent=t,1200);};
+  $('autoSaveTgl').onclick=()=>{const v=$('autoSaveTgl').classList.contains('on')?0:1;tgl('autoSaveTgl',v);send({autosave:v});};
+  $('resetSoft').onclick=async()=>{if(confirm('Semua parameter kembali ke bawaan? Preset user tidak ikut terhapus.')){await send({resetSoft:1});load();}};
+  $('resetFactory').onclick=async()=>{if(confirm('RESET PABRIK: semua setelan dan preset user dihapus. Lanjut?')&&confirm('Benar-benar yakin? Alat akan restart seperti baru.')){await send({resetFactory:1});alert('Reset pabrik — alat restart, panel menyambung lagi sebentar lagi.');}};
   bindDlms();
 }
 /* ---------- data ---------- */
 async function load(){try{S=await (await fetch('/api/state')).json();fill();}catch(e){}}
 setInterval(async()=>{try{const m=await (await fetch('/api/meter')).json();
   $('mLf').style.height=Math.min(100,m.l*100)+'%';$('mRf').style.height=Math.min(100,m.r*100)+'%';$('mMf').style.height=Math.min(100,Math.max(m.l,m.r)*100)+'%';$('tLf').style.height=Math.min(100,m.l*100)+'%';$('tRf').style.height=Math.min(100,m.r*100)+'%';
-  $('grbar').style.width=Math.min(100,Math.max(0,-m.gr/24*100))+'%';$('gr_v').textContent=m.gr+' dB';$('clipct').textContent=m.clip;}catch(e){}},200);
+  $('grbar').style.width=Math.min(100,Math.max(0,-m.gr/24*100))+'%';$('gr_v').textContent=m.gr+' dB';$('clipct').textContent=m.clip;if(m.dirty!==undefined)dot(m.dirty);}catch(e){}},200);
 let rtBusy=false;
 setInterval(async()=>{if(rtBusy)return;rtBusy=true;try{const r=await (await fetch('/api/rta')).json();RT=r.rta;}catch(e){}rtBusy=false;},150);
 setInterval(()=>{let moved=false;for(let i=0;i<31;i++){const d=RT[i]-RTs[i];if(Math.abs(d)>0.05){RTs[i]+=d*(d>0?0.55:0.16);moved=true;}}if(moved)draw();},50);
@@ -1933,7 +2087,64 @@ setInterval(async()=>{if(tab!='sys'||sysBusy)return;sysBusy=true;try{const st=aw
   $('ringinfo').textContent='underrun '+st.ur+' · overflow '+st.ov;$('eqpeak').textContent=(st.eqPeak>=0?'+':'')+st.eqPeak+' dB';}catch(e){}sysBusy=false;},2000);
 setInterval(()=>{if(!S)load();},3000);
 fitCv();bind();load();
-</script></body></html>
+</script>
+<style>
+/* ===== PRATINJAU tema APLIKASI (token appmock_s3air) ===== */
+:root{--bg:#17191d;--panel:#1d2026;--panel2:#2a2e36;--line:#383e48;--txt:#e8ecf0;--dim:#8a94a0;--teal:#346ea5;--teal2:#274f75;--org:#e58f8f}
+body{background:#17191d}
+#topbar{background:#1d2026;border-bottom:1px solid #383e48;box-shadow:none}
+#logo b span{color:#38c7e0;text-shadow:none}
+.tabbtn{background:#2a2e36;border-color:#383e48;color:#c6cdd6;border-radius:9px}
+.tabbtn.act{background:#346ea5;border-color:#346ea5;color:#fff;border-bottom:3px solid #346ea5;box-shadow:none}
+.tabbtn.act svg{stroke:#fff}
+#netpill{background:#17191d;border-color:#383e48;color:#9fd8e8;border-radius:8px}
+.card{background:#1d2026;border-color:#383e48;border-radius:12px}
+#dispwrap{background:#101216;border-color:#383e48;border-radius:12px;box-shadow:none}
+.box{background:#2a2e36;border-color:#383e48;border-radius:10px}
+.tgl{background:#2a2e36;border-color:#383e48;color:#d5dbe2;border-radius:8px}
+.tgl.on{background:#346ea5;border-color:#346ea5;color:#fff;box-shadow:none}
+.tgl.red.on{background:#c0392b;border-color:#c0392b;color:#fff;box-shadow:none}
+.chip{background:#23262c;border-color:#383e48;border-radius:8px}
+.chip.sel{background:#1d2026;outline:2px solid #38c7e0;color:#fff}
+select,input[type=number],input[type=text]{background:#17191d;border-color:#383e48;border-radius:8px;color:#e8ecf0}
+input[type=range]{accent-color:#346ea5;--capline:#e8ecf0}
+.strip{background:#1e2127;border-color:#383e48;border-radius:10px}
+#masterstrip{background:#1d2026;border-color:#c0392b;box-shadow:none}
+.towIn{background:#1d2026;border-color:#c0392b;box-shadow:none}
+.towIn input[type=range]{--capline:#f47064}
+#faderbank{background:#1d2026;border-top:1px solid #383e48;box-shadow:none}
+::-webkit-scrollbar-thumb{background:#383e48}
+/* jalur gulir strip sendiri: band menggeser DI DALAM jalurnya, tidak lagi
+   menumpuk di bawah strip master (akar tabrakan fader master di HP) */
+#strips{flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+#strips::-webkit-scrollbar{display:none}
+#masterstrip .mcol{flex:none}
+/* tombol kaki strip mepet ke bawah: fader menyerap sisa ruang, tombol tertancap di dasar strip */
+.strip input.vfader{flex:1 1 auto}
+.strip>button{margin-top:auto}
+/* HP: navbar satu baris ala aplikasi (sebelumnya membungkus jadi 3 baris) */
+@media (max-width:900px){
+  #topbar{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;align-items:center;scrollbar-width:none}
+  #topbar::-webkit-scrollbar{display:none}
+  #topbar>*{flex:none}
+  #logo{padding:2px 8px 2px 2px}
+  #logo small{display:none}
+  .tabbtn{padding:6px 10px;font-size:12px}
+  #topright{display:flex;align-items:center;gap:6px;margin-left:auto}
+  #netpill{display:none}
+  #saveBtn{margin-right:0;padding:6px 9px;font-size:11px}
+  #cliplamp{font-size:10px;padding:4px 6px}
+  /* halaman satu guliran utuh di HP: cangkang app-shell (flex 100dvh)
+     dilepas jadi aliran dokumen biasa + ruang ekor setinggi bank tetap —
+     ujung halaman bisa naik sampai bersih dari bank (sebelumnya nyangkut) */
+  body{height:auto;min-height:100dvh;display:block;padding-bottom:347px}
+  #work{display:block;height:auto;min-height:0}
+  #stage{display:block;height:auto}
+  #lower{display:block;height:auto}
+  #bandbar{height:auto;max-height:none;overflow-y:visible}
+}
+</style>
+</body></html>
 )HTML";
 
 static void setupWeb() {
@@ -1942,7 +2153,9 @@ static void setupWeb() {
   server.on("/api/meter", []() {
     String j = "{\"l\":" + String(meterPeakL, 3) + ",\"r\":" + String(meterPeakR, 3) +
                ",\"lrms\":" + String(meterRmsL, 3) + ",\"rrms\":" + String(meterRmsR, 3) +
-               ",\"gr\":" + String(grMeterDb, 1) + ",\"clip\":" + String(clipCount) + "}";
+               ",\"gr\":" + String(grMeterDb, 1) + ",\"clip\":" + String(clipCount) +
+               ",\"dirty\":" + String((stateDirty || dlmsSaveDirty) ? 1 : 0) +
+               ",\"flt\":" + String(statFlush) + "}";
     meterPeakL = meterPeakR = 0;
     server.send(200, "application/json", j);
   });
@@ -2010,6 +2223,18 @@ static void setupWeb() {
     if (has("clipReset")) clipCount = 0;
     for (int a = 0; a < server.args(); a++)
       dlmsSetKey(server.argName(a), server.arg(a).toFloat(), server.arg(a) == "1");
+    {
+      bool touched = false;
+      for (int a = 0; a < server.args(); a++) {
+        String an = server.argName(a);
+        if (an != "saveState" && an != "autosave" && an != "resetSoft" && an != "resetFactory" && an != "clipReset") touched = true;
+      }
+      if (has("autosave")) { sysAutoSave = on("autosave"); prefs.begin("mbahdac2", false); prefs.putBool("autosave", sysAutoSave); prefs.end(); }
+      if (has("saveState")) saveStateNvs();
+      if (has("resetSoft")) softResetNow();
+      if (touched) { stateDirty = true; lastChangeMs = millis(); }
+      if (has("resetFactory")) { server.send(200, "application/json", "{\"ok\":1}"); factoryResetNow(); return; }
+    }
     if (coef) coefDirty = true;
     if (dyn) rebuildDynCoefs();
     server.send(200, "application/json", "{\"ok\":1}");
@@ -2019,7 +2244,7 @@ static void setupWeb() {
     bool ok = false;
     if (n.startsWith("user:")) ok = loadUserPreset(n.substring(5).toInt());
     else ok = setFactoryPreset(n.c_str(), params);
-    if (ok) { coefDirty = true; armDip = true; rebuildDynCoefs(); }
+    if (ok) { coefDirty = true; armDip = true; rebuildDynCoefs(); stateDirty = true; lastChangeMs = millis(); }
     server.send(200, "application/json", ok ? "{\"ok\":1}" : "{\"ok\":0}");
   });
   server.on("/api/save", HTTP_POST, []() {
@@ -2070,6 +2295,10 @@ static bool serSetOne(const String &kv) {
     if (i < 0 || i >= NUM_GEQ) return false;
     params.geq[i] = constrain(v, -12.0f, 12.0f); coefDirty = true; return true;
   }
+  if (k == "saveState") { saveStateNvs(); serActed = true; return true; }
+  if (k == "autosave") { sysAutoSave = b; prefs.begin("mbahdac2", false); prefs.putBool("autosave", sysAutoSave); prefs.end(); serActed = true; return true; }
+  if (k == "resetSoft") { softResetNow(); serActed = true; return true; }
+  if (k == "resetFactory") { serActed = true; factoryResetNow(); return true; }
   if (k == "dlmstest") { dlmsSelfTest(); return true; }
   if (dlmsSetKey(k, v, b)) return true;
 #define SK(nm, field, lo, hi) if (k == nm) { field = constrain(v, lo, hi); coefDirty = true; return true; }
@@ -2123,12 +2352,12 @@ static void serialPoll() {
     if (ln == "state") { Serial0.println(stateJson()); continue; }
     if (ln.startsWith("preset ")) {
       bool ok = setFactoryPreset(ln.substring(7).c_str(), params);
-      if (ok) { coefDirty = true; armDip = true; rebuildDynCoefs(); }
+      if (ok) { coefDirty = true; armDip = true; rebuildDynCoefs(); stateDirty = true; lastChangeMs = millis(); }
       Serial0.println(ok ? "OK" : "ERR preset"); continue;
     }
     if (ln.startsWith("upreset ")) {
       bool ok = loadUserPreset(ln.substring(8).toInt());
-      if (ok) { coefDirty = true; armDip = true; rebuildDynCoefs(); }
+      if (ok) { coefDirty = true; armDip = true; rebuildDynCoefs(); stateDirty = true; lastChangeMs = millis(); }
       Serial0.println(ok ? "OK" : "ERR upreset"); continue;
     }
     if (ln.startsWith("save ")) { Serial0.println(saveUserPreset(ln.substring(5).toInt()) ? "OK" : "ERR save"); continue; }
@@ -2142,6 +2371,8 @@ static void serialPoll() {
       ln = ln.substring(sp + 1); ln.trim();
     }
     Serial0.println(okc ? "OK" : "ERR");
+    if (okc > 0 && !serActed) { stateDirty = true; lastChangeMs = millis(); }
+    serActed = false;
   }
 }
 
@@ -2150,8 +2381,11 @@ void setup() {
   Serial0.begin(115200);
   delay(300);
   setFlat(params);
+  loadStateNvs();
   setDlmsDefaults();
   loadDlmsNvs();
+  loadSysPrefs();
+  pinMode(0, INPUT_PULLUP);
   dlms.on = false; // pengaman boot v5.0.4: mode DLMS selalu mulai OFF (setelan lain utuh)
   snapDlmsSmooth();
   rebuildDlmsCoefs();
@@ -2169,9 +2403,28 @@ void setup() {
 void loop() {
   wifiPoll();
   serialPoll();
-  static uint32_t lastDlmsSave = 0;
-  if (dlmsSaveDirty && millis() - lastDlmsSave > 2000) {
-    lastDlmsSave = millis(); dlmsSaveDirty = false; saveDlmsNvs();
+  if ((stateDirty || dlmsSaveDirty) && sysAutoSave && millis() - lastChangeMs > 2000 && millis() - lastStateSave > 2000) {
+    lastStateSave = millis(); saveStateNvs();
+  }
+  bootBtnPoll();
+  { // pengawas DSP + pengumpan hening saat USB berhenti (gagal = diam)
+    static uint32_t wdT = 0, wdBeat = 0; static uint8_t wdStall = 0;
+    static bool spkWas = false, spkSilenced = true;
+    uint32_t nowMs = millis();
+    if (lastSpkMs && nowMs - lastSpkMs < 2000) { spkWas = true; spkSilenced = false; }
+    else if (spkWas && !spkSilenced && nowMs - lastSpkMs > 300) {
+      static const int32_t zeros[1024] = {0};
+      for (int i = 0; i < 3; i++) i2s.write((uint8_t *)zeros, sizeof(zeros));
+      spkSilenced = true;
+    }
+    if (nowMs - wdT > 1000) {
+      wdT = nowMs;
+      if (lastSpkMs && nowMs - lastSpkMs < 2000 && dspHeartbeat == wdBeat) {
+        stateFlushNeeded = true;
+        if (++wdStall >= 2) { Serial0.println("[wd] DSP macet - restart pengaman"); delay(50); ESP.restart(); }
+      } else wdStall = 0;
+      wdBeat = dspHeartbeat;
+    }
   }
   static uint32_t lastRta = 0;
   if (millis() - lastRta > 100) { lastRta = millis(); computeRTA(); }

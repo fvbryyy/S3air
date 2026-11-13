@@ -67,5 +67,5 @@ state
 - Rilis baru dari mbah → `git pull` di PC → upload via Arduino IDE.
 - Edit lokal di PC → `git add -A && git commit -m "pesan" && git push`.
 
-Versi firmware saat ini: **v5.0.8 S3 Air** — panel web gaya X Air (simple, satu fokus per tab), kini dengan mode DLMS per kanal dan tema soft hijau gelap. (Proyek ini sebelumnya bernama MbahDAC;
+Versi firmware saat ini: **v5.2 S3 Air** — panel web diselaraskan ke rancangan aplikasi (tema gelap aplikasi) dan tata letak HP diperbaiki (strip band tidak lagi menabrak master, tombol ON mepet ke bawah, halaman bisa digulir sampai bersih dari bank fader); isi di dalamnya tetap rilis besar v5.1: persistensi keadaan penuh (tombol SIMPAN + auto-save bertoggle + reset dua tingkat), keluaran 24-bit berdither TPDF, transisi bebas klik (crossfade delay + celup dua fase), dan lapisan gagal-diam (sanitasi NaN/DC, pengawas DSP, USB berhenti = hening). (Proyek ini sebelumnya bernama MbahDAC;
 identitas USB & alamat panel masih `MbahDAC USB` / `mbahdac.local`).
