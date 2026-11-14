@@ -3,8 +3,10 @@
 USB DAC + DSP berbasis **ESP32-S3 N16R8** dan DAC I2S **PCM5102**.
 Komputer membaca alat ini sebagai soundcard USB **16-bit / 48 kHz**;
 semua pengolahan suara dikerjakan task DSP khusus (FreeRTOS, Core 1)
-dan diatur dari panel web di jaringan rumah (`http://mbahdac.local`)
-atau lewat perintah serial di port COM.
+dan diatur dari aplikasi Android **S3 KONSOL** lewat API di jaringan
+rumah (`mbahdac.local`). Di alamat yang sama ada halaman darurat kecil
+(status alat + ganti WiFi) untuk keadaan darurat, dan kontrol serial
+tetap tersedia di port COM.
 
 ## Fitur DSP
 
@@ -17,6 +19,14 @@ atau lewat perintah serial di port COM.
 - 5 preset pabrik (Flat, Speaker DIY, Vokal, Bass, Malam) + 10 slot preset user (NVS)
 - Banding A/B, ekspor / impor setting JSON
 - Semua fader meluncur halus (glide per-sampel, tanpa kresek)
+
+## Mode DLMS (manajemen loudspeaker 2 arah)
+
+- 2 input (A / B): aktif, gain, delay 0-100 ms
+- 2 kanal universal (OUT 1 / OUT 2): sumber A / B / A+B, crossover
+  HPF + LPF (Linkwitz-Riley / Butterworth sampai 48 dB/okt), PEQ 3 band,
+  gain, delay 0-80 ms, peak limiter per kanal, balik fase
+- Mode DLMS mati = bypass total ke rantai reguler; master tetap jalan
 
 ## Wiring (sesuai rakitan)
 
@@ -45,12 +55,13 @@ USB memakai port native ESP32-S3 (GPIO 19/20).
    `wifi_config.h`, lalu isi nama & password WiFi rumah di dalamnya.
    File itu tidak ikut ter-commit, jadi password tidak akan bocor.
 3. Buka `S3Air_USB.ino` di Arduino IDE, samakan setting di atas, upload.
-4. Buka `http://mbahdac.local` dari HP / PC di WiFi yang sama.
+4. Buka aplikasi S3 KONSOL di HP (WiFi yang sama) dan sambungkan ke alat; `http://mbahdac.local` kini menampilkan halaman darurat.
 
-Panduan lengkap (panel, serial, troubleshooting): [PANDUAN.md](PANDUAN.md).
+Panduan lengkap (API, serial, troubleshooting): [PANDUAN.md](PANDUAN.md).
 
-Kredensial juga bisa diganti belakangan dari tab Sistem di panel web
-(tersimpan di NVS alat dan menimpa isi `wifi_config.h`).
+Kredensial juga bisa diganti belakangan dari aplikasi S3 KONSOL
+(Pengaturan -> Jaringan WiFi alat) atau dari halaman darurat —
+tersimpan di NVS alat dan menimpa isi `wifi_config.h`.
 
 ## Kontrol serial (Serial0, 115200 baud)
 
@@ -67,5 +78,14 @@ state
 - Rilis baru dari mbah → `git pull` di PC → upload via Arduino IDE.
 - Edit lokal di PC → `git add -A && git commit -m "pesan" && git push`.
 
-Versi firmware saat ini: **v5.2.1 S3 Air** — v5.2 + izin CORS pada API (server.enableCORS) agar aplikasi web/Flutter Web bisa membaca /api dari origin lain; panel web diselaraskan ke rancangan aplikasi (tema gelap aplikasi) dan tata letak HP diperbaiki (strip band tidak lagi menabrak master, tombol ON mepet ke bawah, halaman bisa digulir sampai bersih dari bank fader); isi di dalamnya tetap rilis besar v5.1: persistensi keadaan penuh (tombol SIMPAN + auto-save bertoggle + reset dua tingkat), keluaran 24-bit berdither TPDF, transisi bebas klik (crossfade delay + celup dua fase), dan lapisan gagal-diam (sanitasi NaN/DC, pengawas DSP, USB berhenti = hening). (Proyek ini sebelumnya bernama MbahDAC;
-identitas USB & alamat panel masih `MbahDAC USB` / `mbahdac.local`).
+Versi firmware saat ini: **v1.0.0 S3 Air — RILIS FINAL set fitur WiFi**
+(2026-11-14). Penomoran diulang ke 1.0.0 mengiringi aplikasi S3 KONSOL 1.0.
+Isinya = v5.2.5: panel web penuh digantikan halaman darurat kecil (setelan
+resmi full aplikasi; server/API tetap hidup untuk aplikasi), limiter kanal
+DLMS berupa peak limiter (v5.2.2), delay kanal DLMS 0-80 ms (v5.2.3), dan
+meter + RTA gabungan dalam satu respons untuk aplikasi (v5.2.4) — di atas
+fondasi v5.1 (persistensi penuh, keluaran 24-bit berdither TPDF, transisi
+bebas klik, lapisan gagal-diam). Bluetooth untuk mode lapangan adalah
+tonggak berikutnya (1.1), belum termasuk di rilis ini. (Proyek ini
+sebelumnya bernama MbahDAC; identitas USB & alamat masih `MbahDAC USB` /
+`mbahdac.local`).

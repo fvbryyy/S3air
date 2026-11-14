@@ -2,7 +2,8 @@
 //  S3 Air - USB DAC + DSP Console
 //  ESP32-S3 (N16R8) + PCM5102 | USB Audio 16-bit / 48 kHz
 //  (core ESP32-S3 hanya mendukung UAC 16-bit; jalur 24-bit khusus ESP32-P4)
-//  DSP di task FreeRTOS (Core 1); kontrol panel web + serial.
+//  DSP di task FreeRTOS (Core 1); kontrol aplikasi S3 KONSOL via API HTTP,
+//  halaman darurat, dan perintah serial.
 //  Versi firmware: FW_VERSION di bawah. Panduan lengkap,
 //  setting IDE & wiring: lihat PANDUAN.md di repo ini.
 // ============================================================
@@ -30,7 +31,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v5.2.5 S3 Air"
+#define FW_VERSION "v1.0.0 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
