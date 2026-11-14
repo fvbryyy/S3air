@@ -3,8 +3,8 @@
 USB DAC + DSP berbasis **ESP32-S3 N16R8** dan DAC I2S **PCM5102**.
 Komputer membaca alat ini sebagai soundcard USB **16-bit / 48 kHz**;
 semua pengolahan suara dikerjakan task DSP khusus (FreeRTOS, Core 1)
-dan diatur dari aplikasi Android **S3 KONSOL** lewat API di jaringan
-rumah (`mbahdac.local`). Di alamat yang sama ada halaman darurat kecil
+dan diatur dari aplikasi Android **S3 KONSOL** — lewat WiFi di rumah
+(API `mbahdac.local`) atau lewat **Bluetooth** di lapangan (sejak v1.1.0). Di alamat yang sama ada halaman darurat kecil
 (status alat + ganti WiFi) untuk keadaan darurat, dan kontrol serial
 tetap tersedia di port COM.
 
@@ -47,6 +47,8 @@ USB memakai port native ESP32-S3 (GPIO 19/20).
   alat ini (Code 10) karena gabungan CDC + audio tidak didukung driver Windows
 - PSRAM: **OPI PSRAM**
 - Flash Size: **16 MB**
+- Partition Scheme: **Huge APP (3MB No OTA/1MB SPIFFS)** — wajib sejak v1.1.0
+- Library: **NimBLE-Arduino** by h2zero (pasang via Library Manager)
 
 ## Cara pakai
 
@@ -78,14 +80,13 @@ state
 - Rilis baru dari mbah → `git pull` di PC → upload via Arduino IDE.
 - Edit lokal di PC → `git add -A && git commit -m "pesan" && git push`.
 
-Versi firmware saat ini: **v1.0.0 S3 Air — RILIS FINAL set fitur WiFi**
-(2026-11-14). Penomoran diulang ke 1.0.0 mengiringi aplikasi S3 KONSOL 1.0.
-Isinya = v5.2.5: panel web penuh digantikan halaman darurat kecil (setelan
-resmi full aplikasi; server/API tetap hidup untuk aplikasi), limiter kanal
-DLMS berupa peak limiter (v5.2.2), delay kanal DLMS 0-80 ms (v5.2.3), dan
-meter + RTA gabungan dalam satu respons untuk aplikasi (v5.2.4) — di atas
-fondasi v5.1 (persistensi penuh, keluaran 24-bit berdither TPDF, transisi
-bebas klik, lapisan gagal-diam). Bluetooth untuk mode lapangan adalah
-tonggak berikutnya (1.1), belum termasuk di rilis ini. (Proyek ini
-sebelumnya bernama MbahDAC; identitas USB & alamat masih `MbahDAC USB` /
-`mbahdac.local`).
+Versi firmware saat ini: **v1.1.0 S3 Air — Bluetooth** (2026-11-14).
+Server BLE (NimBLE) mencerminkan seluruh permukaan kontrol untuk mode
+lapangan: perintah teks (state/set/preset/save/wifi) + meter & spektrum
+biner 55 byte / 50 ms; bonding wajib dengan jendela pairing 60 detik
+(setelah boot / tombol BOOT). Fondasinya tetap rilis final WiFi v1.0.0
+(= v5.2.5: halaman darurat, peak limiter DLMS, delay 0-80 ms, meter+RTA
+gabungan, persistensi penuh, keluaran 24-bit berdither TPDF, transisi
+bebas klik, lapisan gagal-diam). Syarat build: library NimBLE-Arduino +
+Partition Scheme Huge APP. (Proyek ini sebelumnya bernama MbahDAC;
+identitas USB & alamat masih `MbahDAC USB` / `mbahdac.local`).

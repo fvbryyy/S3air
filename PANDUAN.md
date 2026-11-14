@@ -14,7 +14,17 @@ Core 1); USB dan DSP bertukar sampel lewat ring buffer.
 | USB CDC On Boot | **Disabled** |
 | PSRAM | OPI PSRAM |
 | Flash Size | 16 MB (N16R8) |
+| Partition Scheme | **Huge APP (3MB No OTA)** — wajib sejak v1.1.0 |
 | Core esp32 | 3.3.12 |
+| Library tambahan | **NimBLE-Arduino** by h2zero (Library Manager; terverifikasi 2.5.2) |
+
+Sejak v1.1.0 (Bluetooth) ukuran sketch ±1,31 MB — TIDAK muat di skema
+partisi bawaan (slot aplikasi 1,3 MB), jadi Partition Scheme wajib
+**Huge APP**. Mengganti skema memindahkan partisi NVS: upload pertama
+dengan skema baru membuat setelan & preset user di alat kembali ke
+bawaan SATU KALI. Kredensial WiFi aman (alat jatuh ke `wifi_config.h`
+bila NVS kosong); ekspor JSON dulu dari aplikasi bila ada tuning yang
+berharga, impor lagi sesudahnya.
 
 `USB CDC On Boot` harus Disabled: gabungan USB CDC + audio membuat driver
 Windows gagal start (Code 10). Debug & kontrol serial lewat Serial0
@@ -134,6 +144,7 @@ lpfF tf p0 p1 p2 peqOn gain dly lim pol`. Contoh:
 
 ## 8. Riwayat versi
 
+- **v1.1.0 S3 Air — BLUETOOTH (mode lapangan)** (2026-11-14): server BLE NimBLE-Arduino 2.5.2 di Core 0 (audio Core 1 tidak disentuh). GATT: satu service khusus dengan kar. CMD (perintah teks sebaris: state / set k=v&.. / preset / save / wifi — logika set BERBAGI fungsi applySetList dengan /api/set), kar. RESP (jawaban JSON mengalir sebagai notifikasi, diakhiri notifikasi satu byte '\n'), kar. METER (paket biner 55 byte / 50 ms: peak/RMS/GR float + bendera + clip + flt + 31 byte RTA). Perintah dirakit dari ring buffer dan dijalankan di loop() — callback NimBLE hanya menyalin byte. Keamanan: bonding wajib, kar. CMD/RESP terenkripsi; ikatan BARU hanya diterima selama jendela pairing terbuka (60 dtk setelah boot, atau tekan BOOT >= 250 ms kapan pun untuk membuka 60 dtk); HP yang sudah terikat menyambung lagi otomatis. Aplikasi: fallback otomatis WiFi -> Bluetooth + pilihan manual di layar sambut. SYARAT BUILD BARU: library NimBLE-Arduino + Partition Scheme Huge APP (sketch 1.312.367 byte = 41% slot 3 MB; RAM 75%).
 - **v1.0.0 S3 Air — RILIS FINAL set fitur WiFi** (2026-11-14): penomoran diulang ke 1.0.0 mengiringi aplikasi S3 KONSOL 1.0. Isi = v5.2.5 (panel web penuh 74 KB diturunkan jadi halaman darurat 2,8 KB — setelan full aplikasi, server/API tetap hidup; ganti WiFi kini dari aplikasi + halaman darurat) + v5.2.4 (RTA ikut dalam respons /api/meter) + v5.2.3 (delay kanal DLMS 0-80 ms, buffer delay 4096 sampel) + v5.2.2 (limiter kanal DLMS diganti dari saturator tanh mentah tanpa oversampling menjadi peak limiter beneran — obat bunyi noise saat ambang diturunkan). Bluetooth untuk mode lapangan = tonggak 1.1, belum termasuk di rilis ini.
 - **v5.2.1 S3 Air** - satu-satunya perubahan: `server.enableCORS(true)` sebelum `server.begin()` — API kini membawa header izin lintas-origin, jadi aplikasi Flutter Web (debug di Chrome) bisa membaca /api/state|meter|rta dan mengirim /api/set dari origin localhost. Terbukti perlu 2026-11-13: panel di 192.168.1.26 terbuka normal di browser, tetapi aplikasi web debug ditolak browser (CORS) sebelum firmware memberi izin. Aplikasi native (Android/Windows) tidak terpengaruh; fungsi & DSP identik v5.2.
 - **v5.2 S3 Air** - panel web diselaraskan ke rancangan aplikasi + perbaikan tata letak HP; DSP, persistensi, dan lapisan keamanan identik v5.1 (panel ditanam dari berkas pratinjau yang disetujui user lebih dulu). TEMA panel diganti tema aplikasi: latar #17191d, panel #1d2026/#2a2e36, tab aktif balok biru #346ea5, aksen pilihan cyan #38c7e0, garis penanda kap master merah #f47064 — menggantikan SOFT HIJAU v5.x di panel. Perbaikan HP (terukur di 393x873 dari laporan & screenshot user): (1) strip band kini bergeser di jalur gulirnya sendiri dan terpotong rapi di tepi strip MAIN — sebelumnya strip B5 tertumpuk DI BALIK strip master sampai kap putihnya terlihat di dalam master (master tampak bercap dua); meter master yang sempat menyusut kini tampil penuh. (2) Navbar HP satu baris bisa digeser (tinggi 133px/3 baris -> 49px). (3) Tombol ON strip mepet ke bawah sejajar MUTE master (celah 69px -> 8px; rel fader memanjang menyerap ruang slack, 165px -> 226px). (4) Halaman HP jadi satu guliran utuh: cangkang flex 100dvh dilepas pada <=900px dan body diberi ruang ekor 347px — ujung halaman (catatan di dasar tab) yang sebelumnya nyangkut permanen di balik bank fader tetap kini bisa naik bersih di atasnya.

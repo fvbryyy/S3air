@@ -16,6 +16,7 @@
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <Preferences.h>
+#include <NimBLEDevice.h>
 #include <math.h>
 #include "dsp_types.h"
 
@@ -31,7 +32,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v1.0.0 S3 Air"
+#define FW_VERSION "v1.1.0 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -1220,6 +1221,89 @@ document.getElementById('wf').addEventListener('submit',function(e){
 </body></html>
 )HTML";
 
+// Terapkan daftar pasangan kunci=nilai ke parameter — dipakai bersama oleh
+// HTTP /api/set dan perintah "set" Bluetooth (satu logika, dua pintu).
+// preFactory dipanggil tepat sebelum reset pabrik berjalan agar pintu asal
+// sempat mengirim jawaban; *didFactory = true bila reset pabrik dijalankan.
+static void applySetList(const String names[], const String vals[], int n,
+                         const std::function<void()> &preFactory, bool *didFactory) {
+  auto has = [&](const char *k) { for (int i = 0; i < n; i++) if (names[i] == k) return true; return false; };
+  auto get = [&](const char *k) -> String { for (int i = 0; i < n; i++) if (names[i] == k) return vals[i]; return String(""); };
+  auto f = [&](const char *k) { return get(k).toFloat(); };
+  auto on = [&](const char *k) { return get(k) == "1"; };
+  bool coef = false, dyn = false;
+  if (has("preamp")) params.preampDb = constrain(f("preamp"), -12, 6);
+  if (has("trimL")) params.trimLDb = constrain(f("trimL"), -12, 12);
+  if (has("trimR")) params.trimRDb = constrain(f("trimR"), -12, 12);
+  if (has("polL")) params.polL = on("polL");
+  if (has("polR")) params.polR = on("polR");
+  if (has("hpfOn")) { params.hpfOn = on("hpfOn"); coef = true; }
+  if (has("hpfFreq")) { params.hpfFreq = constrain(f("hpfFreq"), 20, 200); coef = true; }
+  if (has("hpfSlope")) { params.hpfSlope = (uint8_t)constrain((int)f("hpfSlope"), 6, 24); coef = true; }
+  if (has("eqMode")) { params.eqMode = (uint8_t)constrain((int)f("eqMode"), 0, 1); coef = true; armDip = true; }
+  if (has("bypass")) { params.bypass = on("bypass"); coef = true; armDip = true; }
+  if (has("loud")) { params.loudnessOn = on("loud"); coef = true; }
+  for (int i = 0; i < NUM_BANDS; i++) {
+    char k[16];
+    snprintf(k, sizeof(k), "b%d_on", i); if (has(k)) { params.band[i].on = on(k); coef = true; armDip = true; }
+    snprintf(k, sizeof(k), "b%d_t", i);  if (has(k)) { params.band[i].type = (uint8_t)constrain((int)f(k), 0, 4); coef = true; dyn = true; armDip = true; }
+    snprintf(k, sizeof(k), "b%d_f", i);  if (has(k)) { params.band[i].freq = constrain(f(k), 20, 20000); coef = true; dyn = true; }
+    snprintf(k, sizeof(k), "b%d_g", i);  if (has(k)) { params.band[i].gainDb = constrain(f(k), -15, 15); coef = true; }
+    snprintf(k, sizeof(k), "b%d_q", i);  if (has(k)) { params.band[i].q = constrain(f(k), 0.4f, 16.0f); coef = true; dyn = true; }
+    snprintf(k, sizeof(k), "b%d_dyn", i); if (has(k)) params.band[i].dynOn = on(k);
+    snprintf(k, sizeof(k), "b%d_dthr", i); if (has(k)) params.band[i].dynThrDb = constrain(f(k), -60, 0);
+    snprintf(k, sizeof(k), "b%d_drng", i); if (has(k)) params.band[i].dynRangeDb = constrain(f(k), -12, 12);
+  }
+  for (int i = 0; i < NUM_GEQ; i++) {
+    char k[8]; snprintf(k, sizeof(k), "g%d", i);
+    if (has(k)) { params.geq[i] = constrain(f(k), -12, 12); coef = true; }
+  }
+  if (has("gateOn")) params.gateOn = on("gateOn");
+  if (has("gateThr")) params.gateThrDb = constrain(f("gateThr"), -80, -10);
+  if (has("gateAtk")) params.gateAttackMs = constrain(f("gateAtk"), 0.1f, 200);
+  if (has("gateRel")) params.gateReleaseMs = constrain(f("gateRel"), 10, 1000);
+  if (has("compOn")) params.compOn = on("compOn");
+  if (has("compThr")) params.compThrDb = constrain(f("compThr"), -48, 0);
+  if (has("compRatio")) params.compRatio = constrain(f("compRatio"), 1, 20);
+  if (has("compAtk")) params.compAttackMs = constrain(f("compAtk"), 0.1f, 300);
+  if (has("compRel")) params.compReleaseMs = constrain(f("compRel"), 10, 1000);
+  if (has("compMake")) params.compMakeupDb = constrain(f("compMake"), 0, 24);
+  if (has("limiter")) params.limiterOn = on("limiter");
+  if (has("ceiling")) params.ceilingDb = constrain(f("ceiling"), -6, 0);
+  if (has("xfOn")) params.crossfeedOn = on("xfOn");
+  if (has("xfAmt")) params.crossfeedAmt = constrain(f("xfAmt"), 0, 0.5f);
+  if (has("width")) params.width = constrain(f("width"), 0, 2);
+  if (has("mono")) params.monoCheck = on("mono");
+  if (has("balance")) params.balance = constrain(f("balance"), -1, 1);
+  if (has("dlyL")) params.delayLms = constrain(f("dlyL"), 0, 20);
+  if (has("dlyR")) params.delayRms = constrain(f("dlyR"), 0, 20);
+  if (has("vol")) { params.volume = constrain(f("vol"), 0, 1); } // loudness mengikuti volume terhalus (glide)
+  if (has("mute")) params.mute = on("mute");
+  if (has("dim")) params.dim = on("dim");
+  if (has("volMax")) params.volMax = constrain(f("volMax"), 0.2f, 1.0f);
+  if (has("autoHr")) params.autoHeadroom = on("autoHr");
+  if (has("clipReset")) clipCount = 0;
+  for (int a = 0; a < n; a++)
+    dlmsSetKey(names[a], vals[a].toFloat(), vals[a] == "1");
+  {
+    bool touched = false;
+    for (int a = 0; a < n; a++) {
+      String an = names[a];
+      if (an != "saveState" && an != "autosave" && an != "resetSoft" && an != "resetFactory" && an != "clipReset") touched = true;
+    }
+    if (has("autosave")) { sysAutoSave = on("autosave"); prefs.begin("mbahdac2", false); prefs.putBool("autosave", sysAutoSave); prefs.end(); }
+    if (has("saveState")) saveStateNvs();
+    if (has("resetSoft")) softResetNow();
+    if (touched) { stateDirty = true; lastChangeMs = millis(); }
+    if (has("resetFactory")) { if (preFactory) preFactory(); if (didFactory) *didFactory = true; factoryResetNow(); return; }
+  }
+  if (coef) coefDirty = true;
+  if (dyn) rebuildDynCoefs();
+}
+
+static String setNamesHttp[40], setValsHttp[40];  // konteks loop (HTTP)
+static String setNamesBle[40], setValsBle[40];    // konteks loop (perintah BLE dirakit di loop)
+
 static void setupWeb() {
   server.on("/", []() { server.send_P(200, "text/html", PAGE); });
   server.on("/api/state", []() { server.send(200, "application/json", stateJson()); });
@@ -1246,78 +1330,11 @@ static void setupWeb() {
     server.send(200, "application/json", j);
   });
   server.on("/api/set", HTTP_POST, []() {
-    auto has = [&](const char *k) { return server.hasArg(k); };
-    auto f = [&](const char *k) { return server.arg(k).toFloat(); };
-    auto on = [&](const char *k) { return server.arg(k) == "1"; };
-    bool coef = false, dyn = false;
-    if (has("preamp")) params.preampDb = constrain(f("preamp"), -12, 6);
-    if (has("trimL")) params.trimLDb = constrain(f("trimL"), -12, 12);
-    if (has("trimR")) params.trimRDb = constrain(f("trimR"), -12, 12);
-    if (has("polL")) params.polL = on("polL");
-    if (has("polR")) params.polR = on("polR");
-    if (has("hpfOn")) { params.hpfOn = on("hpfOn"); coef = true; }
-    if (has("hpfFreq")) { params.hpfFreq = constrain(f("hpfFreq"), 20, 200); coef = true; }
-    if (has("hpfSlope")) { params.hpfSlope = (uint8_t)constrain((int)f("hpfSlope"), 6, 24); coef = true; }
-    if (has("eqMode")) { params.eqMode = (uint8_t)constrain((int)f("eqMode"), 0, 1); coef = true; armDip = true; }
-    if (has("bypass")) { params.bypass = on("bypass"); coef = true; armDip = true; }
-    if (has("loud")) { params.loudnessOn = on("loud"); coef = true; }
-    for (int i = 0; i < NUM_BANDS; i++) {
-      char k[16];
-      snprintf(k, sizeof(k), "b%d_on", i); if (has(k)) { params.band[i].on = on(k); coef = true; armDip = true; }
-      snprintf(k, sizeof(k), "b%d_t", i);  if (has(k)) { params.band[i].type = (uint8_t)constrain((int)f(k), 0, 4); coef = true; dyn = true; armDip = true; }
-      snprintf(k, sizeof(k), "b%d_f", i);  if (has(k)) { params.band[i].freq = constrain(f(k), 20, 20000); coef = true; dyn = true; }
-      snprintf(k, sizeof(k), "b%d_g", i);  if (has(k)) { params.band[i].gainDb = constrain(f(k), -15, 15); coef = true; }
-      snprintf(k, sizeof(k), "b%d_q", i);  if (has(k)) { params.band[i].q = constrain(f(k), 0.4f, 16.0f); coef = true; dyn = true; }
-      snprintf(k, sizeof(k), "b%d_dyn", i); if (has(k)) params.band[i].dynOn = on(k);
-      snprintf(k, sizeof(k), "b%d_dthr", i); if (has(k)) params.band[i].dynThrDb = constrain(f(k), -60, 0);
-      snprintf(k, sizeof(k), "b%d_drng", i); if (has(k)) params.band[i].dynRangeDb = constrain(f(k), -12, 12);
-    }
-    for (int i = 0; i < NUM_GEQ; i++) {
-      char k[8]; snprintf(k, sizeof(k), "g%d", i);
-      if (has(k)) { params.geq[i] = constrain(f(k), -12, 12); coef = true; }
-    }
-    if (has("gateOn")) params.gateOn = on("gateOn");
-    if (has("gateThr")) params.gateThrDb = constrain(f("gateThr"), -80, -10);
-    if (has("gateAtk")) params.gateAttackMs = constrain(f("gateAtk"), 0.1f, 200);
-    if (has("gateRel")) params.gateReleaseMs = constrain(f("gateRel"), 10, 1000);
-    if (has("compOn")) params.compOn = on("compOn");
-    if (has("compThr")) params.compThrDb = constrain(f("compThr"), -48, 0);
-    if (has("compRatio")) params.compRatio = constrain(f("compRatio"), 1, 20);
-    if (has("compAtk")) params.compAttackMs = constrain(f("compAtk"), 0.1f, 300);
-    if (has("compRel")) params.compReleaseMs = constrain(f("compRel"), 10, 1000);
-    if (has("compMake")) params.compMakeupDb = constrain(f("compMake"), 0, 24);
-    if (has("limiter")) params.limiterOn = on("limiter");
-    if (has("ceiling")) params.ceilingDb = constrain(f("ceiling"), -6, 0);
-    if (has("xfOn")) params.crossfeedOn = on("xfOn");
-    if (has("xfAmt")) params.crossfeedAmt = constrain(f("xfAmt"), 0, 0.5f);
-    if (has("width")) params.width = constrain(f("width"), 0, 2);
-    if (has("mono")) params.monoCheck = on("mono");
-    if (has("balance")) params.balance = constrain(f("balance"), -1, 1);
-    if (has("dlyL")) params.delayLms = constrain(f("dlyL"), 0, 20);
-    if (has("dlyR")) params.delayRms = constrain(f("dlyR"), 0, 20);
-    if (has("vol")) { params.volume = constrain(f("vol"), 0, 1); } // loudness mengikuti volume terhalus (glide)
-    if (has("mute")) params.mute = on("mute");
-    if (has("dim")) params.dim = on("dim");
-    if (has("volMax")) params.volMax = constrain(f("volMax"), 0.2f, 1.0f);
-    if (has("autoHr")) params.autoHeadroom = on("autoHr");
-    if (has("clipReset")) clipCount = 0;
-    for (int a = 0; a < server.args(); a++)
-      dlmsSetKey(server.argName(a), server.arg(a).toFloat(), server.arg(a) == "1");
-    {
-      bool touched = false;
-      for (int a = 0; a < server.args(); a++) {
-        String an = server.argName(a);
-        if (an != "saveState" && an != "autosave" && an != "resetSoft" && an != "resetFactory" && an != "clipReset") touched = true;
-      }
-      if (has("autosave")) { sysAutoSave = on("autosave"); prefs.begin("mbahdac2", false); prefs.putBool("autosave", sysAutoSave); prefs.end(); }
-      if (has("saveState")) saveStateNvs();
-      if (has("resetSoft")) softResetNow();
-      if (touched) { stateDirty = true; lastChangeMs = millis(); }
-      if (has("resetFactory")) { server.send(200, "application/json", "{\"ok\":1}"); factoryResetNow(); return; }
-    }
-    if (coef) coefDirty = true;
-    if (dyn) rebuildDynCoefs();
-    server.send(200, "application/json", "{\"ok\":1}");
+    int n = 0;
+    for (int a = 0; a < server.args() && n < 40; a++) { setNamesHttp[n] = server.argName(a); setValsHttp[n] = server.arg(a); n++; }
+    bool didFactory = false;
+    applySetList(setNamesHttp, setValsHttp, n, []() { server.send(200, "application/json", "{\"ok\":1}"); }, &didFactory);
+    if (!didFactory) server.send(200, "application/json", "{\"ok\":1}");
   });
   server.on("/api/preset", HTTP_POST, []() {
     String n = server.arg("name");
@@ -1456,6 +1473,222 @@ static void serialPoll() {
   }
 }
 
+
+// ============================================================
+//  Bluetooth LE (NimBLE) — jalur lapangan aplikasi S3 KONSOL (v1.1.0).
+//  Perintah teks sebaris diakhiri '\n' ditulis aplikasi ke kar. CMD;
+//  potongan byte perintah dirakit dari ring buffer di loop() (konteks
+//  yang sama dengan serial & HTTP — callback NimBLE hanya menyalin byte).
+//  Jawaban mengalir sebagai notifikasi kar. RESP, diakhiri satu notifikasi
+//  berisi tepat satu byte '\n' (JSON jawaban tidak pernah mengandung '\n').
+//  Meter + spektrum: paket biner 55 byte / 50 ms di kar. METER.
+//  Keamanan: bonding wajib (kar. CMD/RESP terenkripsi). Ikatan BARU hanya
+//  diterima selama jendela pairing terbuka: 60 dtk setelah boot, atau
+//  60 dtk setelah tombol BOOT ditekan (di luar masa reset pabrik 6 dtk).
+// ============================================================
+#define BLE_SVC_UUID   "9e7319c0-3a6d-4f7a-b001-5a33a1c00001"
+#define BLE_CMD_UUID   "9e7319c0-3a6d-4f7a-b001-5a33a1c00002"
+#define BLE_RESP_UUID  "9e7319c0-3a6d-4f7a-b001-5a33a1c00003"
+#define BLE_METER_UUID "9e7319c0-3a6d-4f7a-b001-5a33a1c00004"
+
+static NimBLECharacteristic *bleRespChr = nullptr, *bleMeterChr = nullptr;
+static volatile bool bleLink = false;      // klien tersambung
+static volatile bool bleSecure = false;    // tautan terenkripsi + terikat
+static volatile bool bleMeterSub = false;  // klien berlangganan METER
+static uint16_t bleHandle = BLE_HS_CONN_HANDLE_NONE;
+static uint16_t bleMtuNow = 23;
+static int bleBondsAtConnect = 0;
+static uint32_t blePairUntil = 0;          // akhir jendela pairing (millis)
+static char bleRxRing[1024];
+static volatile uint16_t bleRxHead = 0, bleRxTail = 0;
+
+static void bleRxPush(uint8_t c) {
+  uint16_t nx = (bleRxHead + 1) % (uint16_t)sizeof(bleRxRing);
+  if (nx != bleRxTail) { bleRxRing[bleRxHead] = (char)c; bleRxHead = nx; }
+}
+
+static void bleRespond(const String &payload) {
+  if (!bleLink || !bleRespChr) return;
+  size_t chunk = bleMtuNow > 3 ? bleMtuNow - 3 : 20;
+  size_t len = payload.length(), off = 0;
+  while (off < len) {
+    size_t n = (len - off > chunk) ? chunk : len - off;
+    bleRespChr->notify((const uint8_t *)payload.c_str() + off, n, bleHandle);
+    off += n;
+  }
+  const uint8_t term = '\n';
+  bleRespChr->notify(&term, 1, bleHandle);   // penanda akhir jawaban
+}
+
+static void bleHandleLine(String ln) {
+  ln.trim();
+  if (!ln.length()) return;
+  if (!bleSecure) { Serial0.println("[ble] perintah ditolak: tautan belum aman"); return; }
+  if (ln == "ping") { bleRespond("pong"); return; }
+  if (ln == "state") { bleRespond(stateJson()); return; }
+  if (ln.startsWith("set ")) {
+    String body = ln.substring(4);
+    int n = 0;
+    while (body.length() && n < 40) {
+      int amp = body.indexOf('&');
+      String pair = (amp < 0) ? body : body.substring(0, amp);
+      int eq = pair.indexOf('=');
+      if (eq > 0) { setNamesBle[n] = pair.substring(0, eq); setValsBle[n] = pair.substring(eq + 1); n++; }
+      if (amp < 0) break;
+      body = body.substring(amp + 1);
+    }
+    bool didFactory = false;
+    applySetList(setNamesBle, setValsBle, n, []() { bleRespond("{\"ok\":1}"); }, &didFactory);
+    if (!didFactory) bleRespond("{\"ok\":1}");
+    return;
+  }
+  if (ln.startsWith("preset ")) {
+    String nm = ln.substring(7); nm.trim();
+    bool ok = nm.startsWith("user:") ? loadUserPreset(nm.substring(5).toInt())
+                                     : setFactoryPreset(nm.c_str(), params);
+    if (ok) { coefDirty = true; armDip = true; rebuildDynCoefs(); stateDirty = true; lastChangeMs = millis(); }
+    bleRespond(ok ? "{\"ok\":1}" : "{\"ok\":0}");
+    return;
+  }
+  if (ln.startsWith("save ")) {
+    bleRespond(saveUserPreset(ln.substring(5).toInt()) ? "{\"ok\":1}" : "{\"ok\":0}");
+    return;
+  }
+  if (ln.startsWith("wifi ")) {   // format: wifi <ssid>\t<pass>
+    String rest = ln.substring(5);
+    int tab = rest.indexOf('\t');
+    String ssid = (tab < 0) ? rest : rest.substring(0, tab);
+    String pass = (tab < 0) ? String("") : rest.substring(tab + 1);
+    prefs.begin("mbahdac2", false);
+    prefs.putString("ssid", ssid);
+    prefs.putString("pass", pass);
+    prefs.end();
+    bleRespond("{\"ok\":1}");
+    delay(300);
+    ESP.restart();
+  }
+}
+
+class BleSrvCb : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer *srv, NimBLEConnInfo &info) override {
+    bleLink = true; bleSecure = false; bleMeterSub = false;
+    bleHandle = info.getConnHandle(); bleMtuNow = info.getMTU();
+    bleBondsAtConnect = NimBLEDevice::getNumBonds();
+    srv->updateConnParams(info.getConnHandle(), 12, 24, 0, 180);
+    Serial0.println("[ble] klien tersambung");
+  }
+  void onDisconnect(NimBLEServer *srv, NimBLEConnInfo &info, int reason) override {
+    (void)srv; (void)info; (void)reason;
+    bleLink = false; bleSecure = false; bleMeterSub = false;
+    bleHandle = BLE_HS_CONN_HANDLE_NONE;
+    NimBLEDevice::startAdvertising();
+    Serial0.println("[ble] klien terputus");
+  }
+  void onMTUChange(uint16_t mtu, NimBLEConnInfo &info) override {
+    (void)info; bleMtuNow = mtu;
+  }
+  void onAuthenticationComplete(NimBLEConnInfo &info) override {
+    if (!info.isEncrypted()) {
+      NimBLEDevice::getServer()->disconnect(info.getConnHandle());
+      Serial0.println("[ble] enkripsi gagal — klien diputus");
+      return;
+    }
+    bool windowOpen = (int32_t)(blePairUntil - millis()) > 0;
+    if (NimBLEDevice::getNumBonds() > bleBondsAtConnect && !windowOpen) {
+      NimBLEDevice::deleteBond(info.getAddress());
+      NimBLEDevice::getServer()->disconnect(info.getConnHandle());
+      Serial0.println("[ble] ikatan baru ditolak: jendela pairing tertutup");
+      return;
+    }
+    bleSecure = true;
+    Serial0.println("[ble] tautan aman (terikat)");
+  }
+};
+
+class BleChrCb : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *chr, NimBLEConnInfo &info) override {
+    (void)info;
+    const uint8_t *d = chr->getValue().data();
+    size_t n = chr->getValue().size();
+    for (size_t i = 0; i < n; i++) bleRxPush(d[i]);
+  }
+  void onSubscribe(NimBLECharacteristic *chr, NimBLEConnInfo &info, uint16_t subValue) override {
+    (void)info;
+    if (chr == bleMeterChr) bleMeterSub = (subValue > 0);
+  }
+};
+
+static BleSrvCb bleSrvCb;
+static BleChrCb bleChrCb;
+
+static void setupBle() {
+  NimBLEDevice::init("S3 Air");
+  NimBLEDevice::setSecurityAuth(true, false, true);   // bonding, just-works, koneksi aman (SC)
+  NimBLEDevice::setMTU(512);
+  NimBLEServer *srv = NimBLEDevice::createServer();
+  srv->setCallbacks(&bleSrvCb);
+  NimBLEService *svc = srv->createService(BLE_SVC_UUID);
+  NimBLECharacteristic *cmd = svc->createCharacteristic(
+      BLE_CMD_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC);
+  cmd->setCallbacks(&bleChrCb);
+  bleRespChr = svc->createCharacteristic(
+      BLE_RESP_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ_ENC);
+  bleRespChr->setValue("S3 Air");
+  bleRespChr->setCallbacks(&bleChrCb);
+  bleMeterChr = svc->createCharacteristic(BLE_METER_UUID, NIMBLE_PROPERTY::NOTIFY);
+  bleMeterChr->setCallbacks(&bleChrCb);
+  svc->start();
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  adv->addServiceUUID(BLE_SVC_UUID);
+  adv->setName("S3 Air");
+  NimBLEDevice::startAdvertising();
+  blePairUntil = millis() + 60000;
+  Serial0.println("[ble] S3 Air teriklankan — jendela pairing 60 detik");
+}
+
+static void blePoll() {
+  // BOOT ditekan >= 250 ms (lewat masa reset pabrik) -> buka jendela pairing.
+  static uint32_t lowSince = 0;
+  static bool announced = false;
+  if (millis() > 6000) {
+    if (digitalRead(0) == LOW) {
+      if (!lowSince) lowSince = millis();
+      else if (!announced && millis() - lowSince > 250) {
+        blePairUntil = millis() + 60000; announced = true;
+        Serial0.println("[ble] jendela pairing dibuka 60 detik (BOOT)");
+      }
+    } else { lowSince = 0; announced = false; }
+  }
+  // Rakit perintah dari ring buffer, jalankan per baris.
+  static String line;
+  while (bleRxTail != bleRxHead) {
+    char c = bleRxRing[bleRxTail];
+    bleRxTail = (bleRxTail + 1) % (uint16_t)sizeof(bleRxRing);
+    if (c == '\n') { bleHandleLine(line); line = ""; }
+    else if (c != '\r' && line.length() < 700) line += c;
+  }
+  // Meter + spektrum biner tiap 50 ms untuk pelanggan yang tautannya aman.
+  static uint32_t lastM = 0;
+  if (bleLink && bleSecure && bleMeterSub && millis() - lastM >= 50) {
+    lastM = millis();
+    uint8_t pkt[55];
+    auto putF = [&](int off, float v) { memcpy(pkt + off, &v, 4); };
+    putF(0, meterPeakL); putF(4, meterPeakR);
+    putF(8, meterRmsL);  putF(12, meterRmsR);
+    putF(16, grMeterDb);
+    pkt[20] = (uint8_t)(((stateDirty || dlmsSaveDirty) ? 1 : 0) | (dlms.on ? 2 : 0));
+    uint32_t cc = (uint32_t)clipCount;
+    pkt[21] = (uint8_t)(cc & 0xFF); pkt[22] = (uint8_t)((cc >> 8) & 0xFF);
+    pkt[23] = (uint8_t)min<uint32_t>((uint32_t)statFlush, 255);
+    for (int i = 0; i < 31; i++) {
+      int b = (int)lrintf(rtaLevels[i]) + 60;
+      pkt[24 + i] = (uint8_t)constrain(b, 0, 255);
+    }
+    bleMeterChr->notify(pkt, sizeof(pkt), bleHandle);
+    meterPeakL = meterPeakR = 0;   // semantik sama /api/meter: puncak yang dibaca direset
+  }
+}
+
 // ============================================================
 void setup() {
   Serial0.begin(115200);
@@ -1477,12 +1710,14 @@ void setup() {
   loadWifiCreds();
   setupWeb();
   wifiStart();
+  setupBle();
   Serial0.println("[USB] " FW_VERSION " siap — tunggu Windows memilih 'MbahDAC USB'.");
 }
 
 void loop() {
   wifiPoll();
   serialPoll();
+  blePoll();
   if ((stateDirty || dlmsSaveDirty) && sysAutoSave && millis() - lastChangeMs > 2000 && millis() - lastStateSave > 2000) {
     lastStateSave = millis(); saveStateNvs();
   }
