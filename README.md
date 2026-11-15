@@ -3,10 +3,8 @@
 USB DAC + DSP berbasis **ESP32-S3 N16R8** dan DAC I2S **PCM5102**.
 Komputer membaca alat ini sebagai soundcard USB **16-bit / 48 kHz**;
 semua pengolahan suara dikerjakan task DSP khusus (FreeRTOS, Core 1)
-dan diatur dari aplikasi Android **S3 KONSOL** — lewat WiFi di rumah
-(API `mbahdac.local`) atau lewat **mode AP** di lapangan (sejak v1.2.0:
-alat menyiarkan WiFi "S3 Air", aplikasi menyambung ke 192.168.4.1). Di alamat yang sama ada halaman darurat kecil
-(status alat + ganti WiFi) untuk keadaan darurat, dan kontrol serial
+dan diatur dari aplikasi Android **S3 KONSOL** — lewat **Bluetooth LE
+saja** (sejak v1.3.0; WiFi/mode AP sudah dicabut total). Kontrol serial
 tetap tersedia di port COM.
 
 ## Fitur DSP
@@ -49,7 +47,7 @@ USB memakai port native ESP32-S3 (GPIO 19/20).
 - PSRAM: **OPI PSRAM**
 - Flash Size: **16 MB**
 - Partition Scheme: **Huge APP (3MB No OTA/1MB SPIFFS)** — tetap dipakai sejak v1.1.0 (jangan diganti lagi; mengganti skema memindahkan partisi NVS dan mereset setelan alat)
-- Library tambahan: **tidak ada** sejak v1.2.0 (NimBLE-Arduino tidak lagi dipakai; boleh dibiarkan terpasang)
+- Library tambahan: **NimBLE-Arduino** by h2zero (kembali dipakai sejak v1.3.0; sudah terpasang di PC user)
 
 ## Cara pakai
 
@@ -81,19 +79,15 @@ state
 - Rilis baru dari mbah → `git pull` di PC → upload via Arduino IDE.
 - Edit lokal di PC → `git add -A && git commit -m "pesan" && git push`.
 
-Versi firmware saat ini: **v1.2.1 S3 Air — MODE AP SAJA** (2026-11-15).
-Bluetooth (v1.1.0–v1.1.3) DICABUT atas keputusan user setelah QC gagal:
-stack NimBLE memakan ±62 KB heap sehingga WiFi+BLE tak pernah sehat
-bersamaan dan tambal-memori PSRAM membuat suara serak. Penggantinya
-**mode AP saja** (v1.2.1, menyederhanakan skema STA+AP v1.2.0): alat
-langsung menyiarkan WiFi "S3 Air" (sandi `s3air123`) sejak menyala —
-tidak ada jalur WiFi rumah — dan server HTTP yang sama melayani di
-alamat tetap 192.168.4.1. Semua buffer audio kembali statis di DRAM
-seperti era v5.2.x yang stabil; sketch 1.110.931 byte (35%), RAM
-statik 73%. Fondasinya tetap rilis final WiFi v1.0.0 (= v5.2.5:
-halaman darurat, peak limiter DLMS, delay 0-80 ms, meter+RTA
-gabungan, persistensi penuh, keluaran 24-bit berdither TPDF, transisi
-bebas klik, lapisan gagal-diam). Syarat build: Partition Scheme
-Huge APP (tetap), tanpa library tambahan. (Proyek ini sebelumnya
+Versi firmware saat ini: **v1.3.0 S3 Air — BLUETOOTH ONLY** (2026-11-15).
+Atas keputusan user, WiFi dicabut TOTAL (mode AP v1.2.x putus-putus di
+HP — MIUI melepas WiFi tanpa internet) dan Bluetooth dipulihkan
+sebagai satu-satunya jalur nirkabel. Kali ini BLE tidak berebut heap
+dengan radio kedua: sketch 722.539 byte (22%), RAM statik 68%, ruang
+heap 102.944 byte — konfigurasi BLE terlega yang pernah dibangun.
+Kontrol penuh lewat aplikasi S3 KONSOL (protokol GATT v1.1.x: perintah
+teks + meter/RTA 55 byte per 50 ms, interval koneksi 15–30 ms) dan
+serial. Semua buffer audio statis di DRAM; halaman web/API HTTP sudah
+tidak ada. (Proyek ini sebelumnya
 bernama MbahDAC; identitas USB & alamat masih `MbahDAC USB` /
 `mbahdac.local`).

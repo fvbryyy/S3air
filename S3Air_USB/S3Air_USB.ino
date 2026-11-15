@@ -12,29 +12,16 @@
 #include "ESP_I2S.h"
 #include "USB.h"
 #include "USBAudioCard.h"
-#include <WiFi.h>
-#include <WebServer.h>
-#include <ESPmDNS.h>
 #include <Preferences.h>
-// v1.2.0: Bluetooth DICABUT total (keputusan user 2026-11-15) — jalur
-// lapangan diganti mode AP WiFi. Stack NimBLE memakan ±62 KB heap dan
-// membuat WiFi+BLE tak pernah sehat bersamaan (saga v1.1.0–v1.1.3).
+#include <NimBLEDevice.h>
+// v1.3.0: WiFi DICABUT total (keputusan user 2026-11-15) — Bluetooth
+// ONLY. Mode AP putus-putus di HP (MIUI melepas WiFi tanpa internet);
+// BLE gagal di v1.1.x karena berebut heap dengan WiFi — kini seluruh
+// heap milik Bluetooth. Library: NimBLE-Arduino (sudah terpasang).
 #include <math.h>
 #include "dsp_types.h"
 
-// ---- Kredensial WiFi rumah ----
-// Taruh di file wifi_config.h (salin dari wifi_config.example.h lalu isi).
-// wifi_config.h TIDAK ikut ter-commit (.gitignore) - password tidak bocor ke repo.
-// Tanpa file itu sketch tetap compile memakai placeholder di bawah
-// (audio tetap jalan, panel web nonaktif sampai kredensial diisi).
-#if __has_include("wifi_config.h")
-#include "wifi_config.h"
-#else
-#define WIFI_SSID "ISI_NAMA_WIFI_RUMAH"
-#define WIFI_PASS "ISI_PASSWORD_WIFI"
-#endif
-#define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v1.2.1 S3 Air"
+#define FW_VERSION "v1.3.0 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -1079,53 +1066,7 @@ static bool userPresetExists(int slot) {
 }
 
 // ============================================================
-//  WiFi (STA — always on)
-// ============================================================
-WebServer server(80);
-static String wifiSSID, wifiPass;
-static bool wifiOn = false, mdnsOn = false;
-
-static void loadWifiCreds() {
-  prefs.begin("mbahdac2", true);
-  wifiSSID = prefs.getString("ssid", WIFI_SSID);
-  wifiPass = prefs.getString("pass", WIFI_PASS);
-  prefs.end();
-}
-// v1.2.1: MODE AP SAJA (keputusan user 2026-11-15: "langsung mode AP
-// only aja") — menggantikan skema STA+AP cadangan v1.2.0. Alat langsung
-// menyiarkan WiFi sendiri "S3 Air" sejak menyala; tidak ada jalur WiFi
-// rumah sama sekali. Alamat selalu tetap 192.168.4.1, protokol HTTP
-// yang sama. (Bluetooth sudah dicabut di v1.2.0.)
-#define AP_SSID "S3 Air"
-#define AP_PASS "s3air123"
-static bool apOn = false;
-static bool serverOn = false;
-
-static void startServerOnce() {
-  if (serverOn) return;
-  server.enableCORS(true);  // aplikasi web (Flutter Web) boleh membaca API dari origin lain
-  server.begin();
-  serverOn = true;
-}
-
-static void wifiStart() {
-  if (wifiOn) return;
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID, AP_PASS);
-  apOn = true;
-  wifiOn = true;
-  startServerOnce();
-  if (!mdnsOn && MDNS.begin(DAC_HOSTNAME)) mdnsOn = true;
-  Serial0.printf("[AP] Mode AP aktif: WiFi \"%s\" (sandi %s) — panel di http://192.168.4.1 — heap bebas %u\n",
-                 AP_SSID, AP_PASS, (unsigned)ESP.getFreeHeap());
-}
-static void wifiPoll() {
-  // Mode AP saja: tak ada asosiasi yang dipantau — cukup layani HTTP.
-  if (serverOn) server.handleClient();
-}
-
-// ============================================================
-//  API web
+//  JSON keadaan (dipakai Bluetooth & serial)
 // ============================================================
 static String dlmsJson() {
   String j = ",\"dlms\":{\"on\":" + String(dlms.on ? 1 : 0);
@@ -1150,7 +1091,7 @@ static String dlmsJson() {
 
 static String stateJson() {
   String j = "{";
-  j += "\"fw\":\"" FW_VERSION "\",\"net\":\"" + String("AP: 192.168.4.1") + "\"";
+  j += "\"fw\":\"" FW_VERSION "\",\"net\":\"" + String("Bluetooth") + "\"";
   j += ",\"ur\":" + String(statUnderrun) + ",\"ov\":" + String(statOverflow);
   j += ",\"preamp\":" + String(params.preampDb, 1);
   j += ",\"trimL\":" + String(params.trimLDb, 1) + ",\"trimR\":" + String(params.trimRDb, 1);
@@ -1192,41 +1133,7 @@ static String stateJson() {
 }
 
 // Halaman web disisipkan saat build (webpage.html -> PAGE)
-static const char PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
-<html lang="id"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>S3 Air — Halaman Darurat</title>
-<style>
-:root{color-scheme:dark}
-body{margin:0;background:#17191d;color:#e8ecf0;font-family:system-ui,sans-serif;padding:18px}
-.card{max-width:520px;margin:24px auto;background:#1d2026;border:1px solid #383e48;border-radius:10px;padding:20px}
-h1{font-size:19px;margin:0 0 4px}
-.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#2ea05a;margin-right:7px}
-.sub{color:#7ee2a8;font-size:13px;margin-bottom:14px}
-p{color:#8a94a0;font-size:13px;line-height:1.5}
-label{display:block;font-size:12px;color:#8a94a0;margin:12px 0 5px}
-input{width:100%;box-sizing:border-box;background:#101216;border:1px solid #383e48;border-radius:6px;color:#e8ecf0;padding:10px;font-size:14px}
-button{margin-top:16px;width:100%;background:#2ea05a;color:#08120c;border:0;border-radius:7px;padding:12px;font-size:14px;font-weight:700;cursor:pointer}
-.kv{font-size:13px;margin:3px 0}.kv b{color:#6ed0e4}
-#msg{font-size:13px;margin-top:12px;color:#f8cd37}
-</style></head><body>
-<div class="card">
-<h1><span class="dot"></span>S3 Air</h1>
-<div class="sub">Halaman darurat — setelan lengkap ada di aplikasi S3 Air</div>
-<div id="info"><p>Memuat keadaan alat…</p></div>
-<p>Halaman ini hanya untuk keadaan darurat (mis. aplikasi tidak tersedia). Semua setelan suara diatur dari aplikasi S3 Air di Android.</p>
-<p>Alat selalu menyiarkan WiFi sendiri <b>S3 Air</b> (sandi <b>s3air123</b>) — halaman ini beralamat tetap 192.168.4.1.</p>
-</div>
-<script>
-fetch('/api/state').then(function(r){return r.json();}).then(function(s){
-  document.getElementById('info').innerHTML =
-   '<div class="kv">Firmware: <b>'+s.fw+'</b></div>'+
-   '<div class="kv">Jaringan: <b>'+s.net+'</b></div>'+
-   '<div class="kv">Host: <b>'+location.hostname+'</b></div>';
-}).catch(function(){document.getElementById('info').innerHTML='<p>Tidak bisa membaca keadaan alat.</p>';});
-</script>
-</body></html>
-)HTML";
+
 
 // Terapkan daftar pasangan kunci=nilai ke parameter — dipakai bersama oleh
 // HTTP /api/set — logika set bersama (dulu juga dipakai perintah BLE;
@@ -1309,56 +1216,8 @@ static void applySetList(const String names[], const String vals[], int n,
   if (dyn) rebuildDynCoefs();
 }
 
-static String setNamesHttp[40], setValsHttp[40];  // konteks loop (HTTP)
+static String setNamesBle[40], setValsBle[40];    // konteks loop (perintah BLE dirakit di loop)
 // (v1.2.0: pasangan buffer setNamesBle/setValsBle ikut dicabut bersama BLE)
-
-static void setupWeb() {
-  server.on("/", []() { server.send_P(200, "text/html", PAGE); });
-  server.on("/api/state", []() { server.send(200, "application/json", stateJson()); });
-  server.on("/api/meter", []() {
-    String j = "{\"l\":" + String(meterPeakL, 3) + ",\"r\":" + String(meterPeakR, 3) +
-               ",\"lrms\":" + String(meterRmsL, 3) + ",\"rrms\":" + String(meterRmsR, 3) +
-               ",\"gr\":" + String(grMeterDb, 1) + ",\"clip\":" + String(clipCount) +
-               ",\"dirty\":" + String((stateDirty || dlmsSaveDirty) ? 1 : 0) +
-               ",\"flt\":" + String(statFlush);
-    // v5.2.4 (optimalisasi polling): RTA ikut dalam respons meter — aplikasi
-    // cukup SATU panggilan 150 ms untuk meter + spektrum (dulu dua panggilan
-    // 200+150 ms bersaing di server satu-utas). rtaLevels memang selalu
-    // terpelihara oleh computeRTA(), jadi ini nyaris tanpa biaya.
-    j += ",\"rta\":[";
-    for (int i = 0; i < NUM_GEQ; i++) { if (i) j += ","; j += String(rtaLevels[i], 0); }
-    j += "]}";
-    meterPeakL = meterPeakR = 0;
-    server.send(200, "application/json", j);
-  });
-  server.on("/api/rta", []() {
-    String j = "{\"rta\":[";
-    for (int i = 0; i < NUM_GEQ; i++) { if (i) j += ","; j += String(rtaLevels[i], 0); }
-    j += "]}";
-    server.send(200, "application/json", j);
-  });
-  server.on("/api/set", HTTP_POST, []() {
-    int n = 0;
-    for (int a = 0; a < server.args() && n < 40; a++) { setNamesHttp[n] = server.argName(a); setValsHttp[n] = server.arg(a); n++; }
-    bool didFactory = false;
-    applySetList(setNamesHttp, setValsHttp, n, []() { server.send(200, "application/json", "{\"ok\":1}"); }, &didFactory);
-    if (!didFactory) server.send(200, "application/json", "{\"ok\":1}");
-  });
-  server.on("/api/preset", HTTP_POST, []() {
-    String n = server.arg("name");
-    bool ok = false;
-    if (n.startsWith("user:")) ok = loadUserPreset(n.substring(5).toInt());
-    else ok = setFactoryPreset(n.c_str(), params);
-    if (ok) { coefDirty = true; armDip = true; rebuildDynCoefs(); stateDirty = true; lastChangeMs = millis(); }
-    server.send(200, "application/json", ok ? "{\"ok\":1}" : "{\"ok\":0}");
-  });
-  server.on("/api/save", HTTP_POST, []() {
-    int slot = server.hasArg("slot") ? server.arg("slot").toInt() : 0;
-    server.send(200, "application/json", saveUserPreset(slot) ? "{\"ok\":1}" : "{\"ok\":0}");
-  });
-}
-
-
 
 // ============================================================
 //  Kontrol serial (Serial0) - kanal kedua sejajar panel web.
@@ -1474,6 +1333,214 @@ static void serialPoll() {
 
 
 // ============================================================
+//  Bluetooth LE (NimBLE) — SATU-SATUNYA jalur nirkabel aplikasi
+//  S3 KONSOL (v1.1.0; dipulihkan v1.3.0 — WiFi dicabut total atas
+//  keputusan user: mode AP putus-putus di HP, BLE-only tak berebut
+//  memori dengan radio kedua).
+//  Perintah teks sebaris diakhiri '\n' ditulis aplikasi ke kar. CMD;
+//  potongan byte perintah dirakit dari ring buffer di loop() (konteks
+//  yang sama dengan serial — callback NimBLE hanya menyalin byte).
+//  Jawaban mengalir sebagai notifikasi kar. RESP, diakhiri satu notifikasi
+//  berisi tepat satu byte '\n' (JSON jawaban tidak pernah mengandung '\n').
+//  Meter + spektrum: paket biner 55 byte / 50 ms di kar. METER.
+//  Keamanan: bonding wajib (kar. CMD/RESP terenkripsi). Ikatan BARU hanya
+//  diterima selama jendela pairing terbuka: 60 dtk setelah boot, atau
+//  60 dtk setelah tombol BOOT ditekan (di luar masa reset pabrik 6 dtk).
+// ============================================================
+#define BLE_SVC_UUID   "9e7319c0-3a6d-4f7a-b001-5a33a1c00001"
+#define BLE_CMD_UUID   "9e7319c0-3a6d-4f7a-b001-5a33a1c00002"
+#define BLE_RESP_UUID  "9e7319c0-3a6d-4f7a-b001-5a33a1c00003"
+#define BLE_METER_UUID "9e7319c0-3a6d-4f7a-b001-5a33a1c00004"
+
+static NimBLECharacteristic *bleRespChr = nullptr, *bleMeterChr = nullptr;
+static volatile bool bleLink = false;      // klien tersambung
+static volatile bool bleSecure = false;    // tautan terenkripsi + terikat
+static volatile bool bleMeterSub = false;  // klien berlangganan METER
+static uint16_t bleHandle = BLE_HS_CONN_HANDLE_NONE;
+static uint16_t bleMtuNow = 23;
+static int bleBondsAtConnect = 0;
+static uint32_t blePairUntil = 0;          // akhir jendela pairing (millis)
+static char bleRxRing[1024];
+static volatile uint16_t bleRxHead = 0, bleRxTail = 0;
+
+static void bleRxPush(uint8_t c) {
+  uint16_t nx = (bleRxHead + 1) % (uint16_t)sizeof(bleRxRing);
+  if (nx != bleRxTail) { bleRxRing[bleRxHead] = (char)c; bleRxHead = nx; }
+}
+
+static void bleRespond(const String &payload) {
+  if (!bleLink || !bleRespChr) return;
+  size_t chunk = bleMtuNow > 3 ? bleMtuNow - 3 : 20;
+  size_t len = payload.length(), off = 0;
+  while (off < len) {
+    size_t n = (len - off > chunk) ? chunk : len - off;
+    bleRespChr->notify((const uint8_t *)payload.c_str() + off, n, bleHandle);
+    off += n;
+  }
+  const uint8_t term = '\n';
+  bleRespChr->notify(&term, 1, bleHandle);   // penanda akhir jawaban
+}
+
+static void bleHandleLine(String ln) {
+  ln.trim();
+  if (!ln.length()) return;
+  if (!bleSecure) { Serial0.println("[ble] perintah ditolak: tautan belum aman"); return; }
+  if (ln == "ping") { bleRespond("pong"); return; }
+  if (ln == "state") { bleRespond(stateJson()); return; }
+  if (ln.startsWith("set ")) {
+    String body = ln.substring(4);
+    int n = 0;
+    while (body.length() && n < 40) {
+      int amp = body.indexOf('&');
+      String pair = (amp < 0) ? body : body.substring(0, amp);
+      int eq = pair.indexOf('=');
+      if (eq > 0) { setNamesBle[n] = pair.substring(0, eq); setValsBle[n] = pair.substring(eq + 1); n++; }
+      if (amp < 0) break;
+      body = body.substring(amp + 1);
+    }
+    bool didFactory = false;
+    applySetList(setNamesBle, setValsBle, n, []() { bleRespond("{\"ok\":1}"); }, &didFactory);
+    if (!didFactory) bleRespond("{\"ok\":1}");
+    return;
+  }
+  if (ln.startsWith("preset ")) {
+    String nm = ln.substring(7); nm.trim();
+    bool ok = nm.startsWith("user:") ? loadUserPreset(nm.substring(5).toInt())
+                                     : setFactoryPreset(nm.c_str(), params);
+    if (ok) { coefDirty = true; armDip = true; rebuildDynCoefs(); stateDirty = true; lastChangeMs = millis(); }
+    bleRespond(ok ? "{\"ok\":1}" : "{\"ok\":0}");
+    return;
+  }
+  if (ln.startsWith("save ")) {
+    bleRespond(saveUserPreset(ln.substring(5).toInt()) ? "{\"ok\":1}" : "{\"ok\":0}");
+    return;
+  }
+}
+
+class BleSrvCb : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer *srv, NimBLEConnInfo &info) override {
+    bleLink = true; bleSecure = false; bleMeterSub = false;
+    bleHandle = info.getConnHandle(); bleMtuNow = info.getMTU();
+    bleBondsAtConnect = NimBLEDevice::getNumBonds();
+    srv->updateConnParams(info.getConnHandle(), 12, 24, 0, 180);
+    Serial0.println("[ble] klien tersambung");
+  }
+  void onDisconnect(NimBLEServer *srv, NimBLEConnInfo &info, int reason) override {
+    (void)srv; (void)info; (void)reason;
+    bleLink = false; bleSecure = false; bleMeterSub = false;
+    bleHandle = BLE_HS_CONN_HANDLE_NONE;
+    NimBLEDevice::startAdvertising();
+    Serial0.println("[ble] klien terputus");
+  }
+  void onMTUChange(uint16_t mtu, NimBLEConnInfo &info) override {
+    (void)info; bleMtuNow = mtu;
+  }
+  void onAuthenticationComplete(NimBLEConnInfo &info) override {
+    if (!info.isEncrypted()) {
+      NimBLEDevice::getServer()->disconnect(info.getConnHandle());
+      Serial0.println("[ble] enkripsi gagal — klien diputus");
+      return;
+    }
+    bool windowOpen = (int32_t)(blePairUntil - millis()) > 0;
+    if (NimBLEDevice::getNumBonds() > bleBondsAtConnect && !windowOpen) {
+      NimBLEDevice::deleteBond(info.getAddress());
+      NimBLEDevice::getServer()->disconnect(info.getConnHandle());
+      Serial0.println("[ble] ikatan baru ditolak: jendela pairing tertutup");
+      return;
+    }
+    bleSecure = true;
+    Serial0.println("[ble] tautan aman (terikat)");
+  }
+};
+
+class BleChrCb : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *chr, NimBLEConnInfo &info) override {
+    (void)info;
+    const uint8_t *d = chr->getValue().data();
+    size_t n = chr->getValue().size();
+    for (size_t i = 0; i < n; i++) bleRxPush(d[i]);
+  }
+  void onSubscribe(NimBLECharacteristic *chr, NimBLEConnInfo &info, uint16_t subValue) override {
+    (void)info;
+    if (chr == bleMeterChr) bleMeterSub = (subValue > 0);
+  }
+};
+
+static BleSrvCb bleSrvCb;
+static BleChrCb bleChrCb;
+
+static void setupBle() {
+  bool bleOk = NimBLEDevice::init("S3 Air");
+  Serial0.printf("[BLE] init %s — heap bebas %u, blok terbesar %u\n",
+                 bleOk ? "OK" : "GAGAL", (unsigned)ESP.getFreeHeap(),
+                 (unsigned)ESP.getMaxAllocHeap());
+  NimBLEDevice::setSecurityAuth(true, false, true);   // bonding, just-works, koneksi aman (SC)
+  NimBLEDevice::setMTU(247); // v1.1.2: 247 cukup (JSON mengalir per potong, meter 55 byte) & lebih hemat buffer daripada 512
+  NimBLEServer *srv = NimBLEDevice::createServer();
+  srv->setCallbacks(&bleSrvCb);
+  NimBLEService *svc = srv->createService(BLE_SVC_UUID);
+  NimBLECharacteristic *cmd = svc->createCharacteristic(
+      BLE_CMD_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC);
+  cmd->setCallbacks(&bleChrCb);
+  bleRespChr = svc->createCharacteristic(
+      BLE_RESP_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ_ENC);
+  bleRespChr->setValue("S3 Air");
+  bleRespChr->setCallbacks(&bleChrCb);
+  bleMeterChr = svc->createCharacteristic(BLE_METER_UUID, NIMBLE_PROPERTY::NOTIFY);
+  bleMeterChr->setCallbacks(&bleChrCb);
+  svc->start();
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  adv->addServiceUUID(BLE_SVC_UUID);
+  adv->setName("S3 Air");
+  NimBLEDevice::startAdvertising();
+  blePairUntil = millis() + 60000;
+  Serial0.println("[ble] S3 Air teriklankan — jendela pairing 60 detik");
+}
+
+static void blePoll() {
+  // BOOT ditekan >= 250 ms (lewat masa reset pabrik) -> buka jendela pairing.
+  static uint32_t lowSince = 0;
+  static bool announced = false;
+  if (millis() > 6000) {
+    if (digitalRead(0) == LOW) {
+      if (!lowSince) lowSince = millis();
+      else if (!announced && millis() - lowSince > 250) {
+        blePairUntil = millis() + 60000; announced = true;
+        Serial0.println("[ble] jendela pairing dibuka 60 detik (BOOT)");
+      }
+    } else { lowSince = 0; announced = false; }
+  }
+  // Rakit perintah dari ring buffer, jalankan per baris.
+  static String line;
+  while (bleRxTail != bleRxHead) {
+    char c = bleRxRing[bleRxTail];
+    bleRxTail = (bleRxTail + 1) % (uint16_t)sizeof(bleRxRing);
+    if (c == '\n') { bleHandleLine(line); line = ""; }
+    else if (c != '\r' && line.length() < 700) line += c;
+  }
+  // Meter + spektrum biner tiap 50 ms untuk pelanggan yang tautannya aman.
+  static uint32_t lastM = 0;
+  if (bleLink && bleSecure && bleMeterSub && millis() - lastM >= 50) {
+    lastM = millis();
+    uint8_t pkt[55];
+    auto putF = [&](int off, float v) { memcpy(pkt + off, &v, 4); };
+    putF(0, meterPeakL); putF(4, meterPeakR);
+    putF(8, meterRmsL);  putF(12, meterRmsR);
+    putF(16, grMeterDb);
+    pkt[20] = (uint8_t)(((stateDirty || dlmsSaveDirty) ? 1 : 0) | (dlms.on ? 2 : 0));
+    uint32_t cc = (uint32_t)clipCount;
+    pkt[21] = (uint8_t)(cc & 0xFF); pkt[22] = (uint8_t)((cc >> 8) & 0xFF);
+    pkt[23] = (uint8_t)min<uint32_t>((uint32_t)statFlush, 255);
+    for (int i = 0; i < 31; i++) {
+      int b = (int)lrintf(rtaLevels[i]) + 60;
+      pkt[24 + i] = (uint8_t)constrain(b, 0, 255);
+    }
+    bleMeterChr->notify(pkt, sizeof(pkt), bleHandle);
+    meterPeakL = meterPeakR = 0;   // semantik sama /api/meter: puncak yang dibaca direset
+  }
+}
+
+// ============================================================
 void setup() {
   Serial0.begin(115200);
   delay(300);
@@ -1491,16 +1558,14 @@ void setup() {
   rebuildDynCoefs();
   setupAudio();
   xTaskCreatePinnedToCore(dspTask, "dspTask", 8192, NULL, 8, &dspTaskHandle, 1);
-  loadWifiCreds();
-  setupWeb();
-  wifiStart();
-  Serial0.printf("[MEM] sesudah WiFi — heap bebas %u, blok terbesar %u\n",
+  setupBle();
+  Serial0.printf("[MEM] sesudah BLE — heap bebas %u, blok terbesar %u\n",
                  (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
   Serial0.println("[USB] " FW_VERSION " siap — tunggu Windows memilih 'MbahDAC USB'.");
 }
 
 void loop() {
-  wifiPoll();
+  blePoll();
   serialPoll();
   if ((stateDirty || dlmsSaveDirty) && sysAutoSave && millis() - lastChangeMs > 2000 && millis() - lastStateSave > 2000) {
     lastStateSave = millis(); saveStateNvs();
