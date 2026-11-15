@@ -81,13 +81,14 @@ state
 - Rilis baru dari mbah → `git pull` di PC → upload via Arduino IDE.
 - Edit lokal di PC → `git add -A && git commit -m "pesan" && git push`.
 
-Versi firmware saat ini: **v1.2.0 S3 Air — mode AP pengganti Bluetooth** (2026-11-15).
+Versi firmware saat ini: **v1.2.1 S3 Air — MODE AP SAJA** (2026-11-15).
 Bluetooth (v1.1.0–v1.1.3) DICABUT atas keputusan user setelah QC gagal:
 stack NimBLE memakan ±62 KB heap sehingga WiFi+BLE tak pernah sehat
-bersamaan dan tambal-memori PSRAM membuat suara serak. Jalur lapangan
-kini **mode AP**: STA dicoba 15 detik, lalu alat menyiarkan WiFi
-"S3 Air" (sandi `s3air123`, mode AP+STA) dan server HTTP yang sama
-melayani di 192.168.4.1. Semua buffer audio kembali statis di DRAM
+bersamaan dan tambal-memori PSRAM membuat suara serak. Penggantinya
+**mode AP saja** (v1.2.1, menyederhanakan skema STA+AP v1.2.0): alat
+langsung menyiarkan WiFi "S3 Air" (sandi `s3air123`) sejak menyala —
+tidak ada jalur WiFi rumah — dan server HTTP yang sama melayani di
+alamat tetap 192.168.4.1. Semua buffer audio kembali statis di DRAM
 seperti era v5.2.x yang stabil; sketch 1.110.931 byte (35%), RAM
 statik 73%. Fondasinya tetap rilis final WiFi v1.0.0 (= v5.2.5:
 halaman darurat, peak limiter DLMS, delay 0-80 ms, meter+RTA

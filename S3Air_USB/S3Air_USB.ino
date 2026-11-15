@@ -34,7 +34,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v1.2.0 S3 Air"
+#define FW_VERSION "v1.2.1 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -1091,17 +1091,15 @@ static void loadWifiCreds() {
   wifiPass = prefs.getString("pass", WIFI_PASS);
   prefs.end();
 }
-// v1.2.0: mode AP = jalur lapangan pengganti Bluetooth. Alat mencoba
-// WiFi rumah (STA) lebih dulu; bila 15 detik tak tersambung, ia
-// menyiarkan WiFi sendiri "S3 Air" (WIFI_AP_STA: STA tetap mencoba
-// menyambung di latar). HP gabung ke AP itu, aplikasi menyambung ke
-// alamat tetap 192.168.4.1 — protokol HTTP yang sama persis.
+// v1.2.1: MODE AP SAJA (keputusan user 2026-11-15: "langsung mode AP
+// only aja") — menggantikan skema STA+AP cadangan v1.2.0. Alat langsung
+// menyiarkan WiFi sendiri "S3 Air" sejak menyala; tidak ada jalur WiFi
+// rumah sama sekali. Alamat selalu tetap 192.168.4.1, protokol HTTP
+// yang sama. (Bluetooth sudah dicabut di v1.2.0.)
 #define AP_SSID "S3 Air"
 #define AP_PASS "s3air123"
-#define AP_FALLBACK_MS 15000
 static bool apOn = false;
 static bool serverOn = false;
-static uint32_t wifiStartMs = 0;
 
 static void startServerOnce() {
   if (serverOn) return;
@@ -1112,45 +1110,17 @@ static void startServerOnce() {
 
 static void wifiStart() {
   if (wifiOn) return;
-  WiFi.mode(WIFI_STA);
-  WiFi.setHostname(DAC_HOSTNAME);
-  WiFi.setAutoReconnect(true);
-  WiFi.begin(wifiSSID.c_str(), wifiPass.c_str());
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(AP_SSID, AP_PASS);
+  apOn = true;
   wifiOn = true;
-  wifiStartMs = millis();
+  startServerOnce();
+  if (!mdnsOn && MDNS.begin(DAC_HOSTNAME)) mdnsOn = true;
+  Serial0.printf("[AP] Mode AP aktif: WiFi \"%s\" (sandi %s) — panel di http://192.168.4.1 — heap bebas %u\n",
+                 AP_SSID, AP_PASS, (unsigned)ESP.getFreeHeap());
 }
 static void wifiPoll() {
-  static bool wasConnected = false;
-  if (!wifiOn) return;
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!wasConnected) {
-      wasConnected = true;
-      Serial0.printf("[WiFi] Tersambung: %s — panel di http://%s.local — heap bebas %u\n", WiFi.localIP().toString().c_str(), DAC_HOSTNAME, (unsigned)ESP.getFreeHeap());
-      startServerOnce();
-      if (!mdnsOn && MDNS.begin(DAC_HOSTNAME)) mdnsOn = true;
-    }
-  } else {
-    wasConnected = false;
-    // Diagnostik asosiasi: status WiFi di serial tiap 5 detik selama
-    // belum tersambung (1=SSID tak ditemukan, 4=sandi salah, 6=mencoba).
-    static uint32_t lastWifiLog = 0;
-    if (millis() - lastWifiLog > 5000) {
-      lastWifiLog = millis();
-      Serial0.printf("[WiFi] belum tersambung (status %d) — heap bebas %u\n",
-                     (int)WiFi.status(), (unsigned)ESP.getFreeHeap());
-    }
-    // Cadangan lapangan: nyalakan AP bila STA tak kunjung tersambung.
-    if (!apOn && millis() - wifiStartMs > AP_FALLBACK_MS) {
-      WiFi.mode(WIFI_AP_STA);
-      if (WiFi.softAP(AP_SSID, AP_PASS)) {
-        apOn = true;
-        startServerOnce();
-        if (!mdnsOn && MDNS.begin(DAC_HOSTNAME)) mdnsOn = true;
-        Serial0.printf("[AP] Mode AP aktif: WiFi \"%s\" (sandi %s) — panel di http://192.168.4.1 — heap bebas %u\n",
-                       AP_SSID, AP_PASS, (unsigned)ESP.getFreeHeap());
-      }
-    }
-  }
+  // Mode AP saja: tak ada asosiasi yang dipantau — cukup layani HTTP.
   if (serverOn) server.handleClient();
 }
 
@@ -1180,7 +1150,7 @@ static String dlmsJson() {
 
 static String stateJson() {
   String j = "{";
-  j += "\"fw\":\"" FW_VERSION "\",\"net\":\"" + String(WiFi.status() == WL_CONNECTED ? ("WiFi: " + WiFi.localIP().toString()) : (apOn ? "AP: 192.168.4.1" : "WiFi: Menghubungkan...")) + "\"";
+  j += "\"fw\":\"" FW_VERSION "\",\"net\":\"" + String("AP: 192.168.4.1") + "\"";
   j += ",\"ur\":" + String(statUnderrun) + ",\"ov\":" + String(statOverflow);
   j += ",\"preamp\":" + String(params.preampDb, 1);
   j += ",\"trimL\":" + String(params.trimLDb, 1) + ",\"trimR\":" + String(params.trimRDb, 1);
@@ -1244,16 +1214,8 @@ button{margin-top:16px;width:100%;background:#2ea05a;color:#08120c;border:0;bord
 <h1><span class="dot"></span>S3 Air</h1>
 <div class="sub">Halaman darurat — setelan lengkap ada di aplikasi S3 Air</div>
 <div id="info"><p>Memuat keadaan alat…</p></div>
-<p>Halaman ini hanya untuk keadaan darurat (mis. aplikasi tidak tersedia) dan untuk memindahkan alat ke jaringan WiFi lain. Semua setelan suara diatur dari aplikasi S3 Air di Android.</p>
-<p>Mode lapangan: bila WiFi rumah tidak terjangkau, alat menyiarkan WiFi sendiri <b>S3 Air</b> (sandi <b>s3air123</b>) — gabung ke sana, lalu buka alamat ini lagi di 192.168.4.1 atau sambungkan aplikasi ke mode AP.</p>
-<form id="wf">
-<label>Nama WiFi (SSID)</label>
-<input id="ssid" autocomplete="off" required>
-<label>Kata sandi WiFi</label>
-<input id="pass" type="password">
-<button type="submit">Simpan &amp; mulai ulang alat</button>
-</form>
-<div id="msg"></div>
+<p>Halaman ini hanya untuk keadaan darurat (mis. aplikasi tidak tersedia). Semua setelan suara diatur dari aplikasi S3 Air di Android.</p>
+<p>Alat selalu menyiarkan WiFi sendiri <b>S3 Air</b> (sandi <b>s3air123</b>) — halaman ini beralamat tetap 192.168.4.1.</p>
 </div>
 <script>
 fetch('/api/state').then(function(r){return r.json();}).then(function(s){
@@ -1262,16 +1224,6 @@ fetch('/api/state').then(function(r){return r.json();}).then(function(s){
    '<div class="kv">Jaringan: <b>'+s.net+'</b></div>'+
    '<div class="kv">Host: <b>'+location.hostname+'</b></div>';
 }).catch(function(){document.getElementById('info').innerHTML='<p>Tidak bisa membaca keadaan alat.</p>';});
-document.getElementById('wf').addEventListener('submit',function(e){
-  e.preventDefault();
-  if(!confirm('Alat akan mulai ulang dan pindah ke jaringan baru. Lanjut?'))return;
-  var b=new URLSearchParams();
-  b.set('ssid',document.getElementById('ssid').value);
-  b.set('pass',document.getElementById('pass').value);
-  fetch('/api/wifi',{method:'POST',body:b}).then(function(){
-    document.getElementById('msg').textContent='Tersimpan. Alat mulai ulang — sambungkan perangkat ini ke jaringan WiFi yang baru, lalu buka aplikasi S3 Air.';
-  }).catch(function(){document.getElementById('msg').textContent='Gagal mengirim. Coba lagi.';});
-});
 </script>
 </body></html>
 )HTML";
@@ -1403,15 +1355,6 @@ static void setupWeb() {
   server.on("/api/save", HTTP_POST, []() {
     int slot = server.hasArg("slot") ? server.arg("slot").toInt() : 0;
     server.send(200, "application/json", saveUserPreset(slot) ? "{\"ok\":1}" : "{\"ok\":0}");
-  });
-  server.on("/api/wifi", HTTP_POST, []() {
-    prefs.begin("mbahdac2", false);
-    prefs.putString("ssid", server.arg("ssid"));
-    prefs.putString("pass", server.arg("pass"));
-    prefs.end();
-    server.send(200, "text/plain", "OK, restart...");
-    delay(300);
-    ESP.restart();
   });
 }
 
