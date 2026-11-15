@@ -33,7 +33,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v1.1.2 S3 Air"
+#define FW_VERSION "v1.1.3 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -104,7 +104,7 @@ static const float SMOOTH_COEF = 0.002f;
 // oleh allocDelayLines(), sebelum audio dan radio dinyalakan.
 #define DLY_LEN 4096
 #define IN_DLY_LEN 4800
-#define RING_FRAMES 4096
+#define RING_FRAMES 1024
 static float *dlyBufL = nullptr, *dlyBufR = nullptr;
 static uint16_t dlyWr = 0;
 // DLMS: delay input maks 100 ms (4800 sampel) + penghalus khusus mode DLMS
@@ -127,14 +127,14 @@ static void allocDelayLines() {
   dlyBufR = allocDly(DLY_LEN);
   inDlyBufA = allocDly(IN_DLY_LEN);
   inDlyBufB = allocDly(IN_DLY_LEN);
-  // v1.1.2: ring audio ikut ke PSRAM (total semua buffer ±120 KB di PSRAM)
-  ringIn = (int16_t *)heap_caps_malloc(RING_FRAMES * 2 * sizeof(int16_t),
-                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (!ringIn) ringIn = (int16_t *)malloc(RING_FRAMES * 2 * sizeof(int16_t));
+  // v1.1.3: ring audio KEMBALI ke DRAM, diperkecil 4096 -> 1024 frame
+  // (12 KB). Di PSRAM (v1.1.2) suara SERAK PARAH di alat: callback USB
+  // dan task DSP tersendat latensi PSRAM pada jalur umpan real-time.
+  // 1024 frame = 21 ms cadangan — cukup untuk blok DSP 512 frame;
+  // delay line tetap di PSRAM (akses tap-nya ditoleransi cache).
+  ringIn = (int16_t *)malloc(RING_FRAMES * 2 * sizeof(int16_t));
   if (ringIn) memset(ringIn, 0, RING_FRAMES * 2 * sizeof(int16_t));
-  ringOut = (int32_t *)heap_caps_malloc(RING_FRAMES * 2 * sizeof(int32_t),
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (!ringOut) ringOut = (int32_t *)malloc(RING_FRAMES * 2 * sizeof(int32_t));
+  ringOut = (int32_t *)malloc(RING_FRAMES * 2 * sizeof(int32_t));
   if (ringOut) memset(ringOut, 0, RING_FRAMES * 2 * sizeof(int32_t));
 }
 static float smInGainA = 1.0f, smInGainB = 1.0f;
@@ -536,10 +536,8 @@ static bool dlmsSetKey(const String &k, float v, bool b) {
 // ============================================================
 //  RTOS: ring SPSC — callback USB ringan, DSP di task khusus Core 1
 // ============================================================
-// v1.1.2: ring audio (16 KB + 32 KB) juga di PSRAM — aksesnya blok
-// sekuensial dari task USB & task DSP (bukan ISR), aman lewat cache.
-// v1.1.1 (delay line saja) belum cukup: heap sisa 9,5 KB membuat
-// asosiasi WiFi tersendat dan BLE_INIT masih Malloc failed.
+// Ring audio: v1.1.2 sempat di PSRAM — v1.1.3 kembali ke DRAM dengan
+// kedalaman 1024 frame (lihat catatan di allocDelayLines).
 // (Pointer ringIn/ringOut dideklarasikan di atas, dekat delay line.)
 static volatile uint32_t ringInW = 0, ringInR = 0, ringOutW = 0, ringOutR = 0;
 static volatile uint32_t statUnderrun = 0, statOverflow = 0;

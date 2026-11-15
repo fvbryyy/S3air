@@ -80,7 +80,7 @@ state
 - Rilis baru dari mbah → `git pull` di PC → upload via Arduino IDE.
 - Edit lokal di PC → `git add -A && git commit -m "pesan" && git push`.
 
-Versi firmware saat ini: **v1.1.2 S3 Air — Bluetooth, semua buffer besar di PSRAM** (2026-11-15).
+Versi firmware saat ini: **v1.1.3 S3 Air — Bluetooth, ring audio kembali ke DRAM** (2026-11-15).
 Perbaikan koeksistensi radio v1.1.x: delay line (71 KB) + ring audio (48 KB) dipindah dari
 DRAM internal ke PSRAM agar WiFi + Bluetooth muat bersamaan; RAM statik turun 75% → 39%.
 Server BLE (NimBLE) mencerminkan seluruh permukaan kontrol untuk mode
