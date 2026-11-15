@@ -4,7 +4,8 @@ USB DAC + DSP berbasis **ESP32-S3 N16R8** dan DAC I2S **PCM5102**.
 Komputer membaca alat ini sebagai soundcard USB **16-bit / 48 kHz**;
 semua pengolahan suara dikerjakan task DSP khusus (FreeRTOS, Core 1)
 dan diatur dari aplikasi Android **S3 KONSOL** — lewat WiFi di rumah
-(API `mbahdac.local`) atau lewat **Bluetooth** di lapangan (sejak v1.1.0). Di alamat yang sama ada halaman darurat kecil
+(API `mbahdac.local`) atau lewat **mode AP** di lapangan (sejak v1.2.0:
+alat menyiarkan WiFi "S3 Air", aplikasi menyambung ke 192.168.4.1). Di alamat yang sama ada halaman darurat kecil
 (status alat + ganti WiFi) untuk keadaan darurat, dan kontrol serial
 tetap tersedia di port COM.
 
@@ -47,8 +48,8 @@ USB memakai port native ESP32-S3 (GPIO 19/20).
   alat ini (Code 10) karena gabungan CDC + audio tidak didukung driver Windows
 - PSRAM: **OPI PSRAM**
 - Flash Size: **16 MB**
-- Partition Scheme: **Huge APP (3MB No OTA/1MB SPIFFS)** — wajib sejak v1.1.0
-- Library: **NimBLE-Arduino** by h2zero (pasang via Library Manager)
+- Partition Scheme: **Huge APP (3MB No OTA/1MB SPIFFS)** — tetap dipakai sejak v1.1.0 (jangan diganti lagi; mengganti skema memindahkan partisi NVS dan mereset setelan alat)
+- Library tambahan: **tidak ada** sejak v1.2.0 (NimBLE-Arduino tidak lagi dipakai; boleh dibiarkan terpasang)
 
 ## Cara pakai
 
@@ -80,15 +81,18 @@ state
 - Rilis baru dari mbah → `git pull` di PC → upload via Arduino IDE.
 - Edit lokal di PC → `git add -A && git commit -m "pesan" && git push`.
 
-Versi firmware saat ini: **v1.1.3 S3 Air — Bluetooth, ring audio kembali ke DRAM** (2026-11-15).
-Perbaikan koeksistensi radio v1.1.x: delay line (71 KB) + ring audio (48 KB) dipindah dari
-DRAM internal ke PSRAM agar WiFi + Bluetooth muat bersamaan; RAM statik turun 75% → 39%.
-Server BLE (NimBLE) mencerminkan seluruh permukaan kontrol untuk mode
-lapangan: perintah teks (state/set/preset/save/wifi) + meter & spektrum
-biner 55 byte / 50 ms; bonding wajib dengan jendela pairing 60 detik
-(setelah boot / tombol BOOT). Fondasinya tetap rilis final WiFi v1.0.0
-(= v5.2.5: halaman darurat, peak limiter DLMS, delay 0-80 ms, meter+RTA
+Versi firmware saat ini: **v1.2.0 S3 Air — mode AP pengganti Bluetooth** (2026-11-15).
+Bluetooth (v1.1.0–v1.1.3) DICABUT atas keputusan user setelah QC gagal:
+stack NimBLE memakan ±62 KB heap sehingga WiFi+BLE tak pernah sehat
+bersamaan dan tambal-memori PSRAM membuat suara serak. Jalur lapangan
+kini **mode AP**: STA dicoba 15 detik, lalu alat menyiarkan WiFi
+"S3 Air" (sandi `s3air123`, mode AP+STA) dan server HTTP yang sama
+melayani di 192.168.4.1. Semua buffer audio kembali statis di DRAM
+seperti era v5.2.x yang stabil; sketch 1.110.931 byte (35%), RAM
+statik 73%. Fondasinya tetap rilis final WiFi v1.0.0 (= v5.2.5:
+halaman darurat, peak limiter DLMS, delay 0-80 ms, meter+RTA
 gabungan, persistensi penuh, keluaran 24-bit berdither TPDF, transisi
-bebas klik, lapisan gagal-diam). Syarat build: library NimBLE-Arduino +
-Partition Scheme Huge APP. (Proyek ini sebelumnya bernama MbahDAC;
-identitas USB & alamat masih `MbahDAC USB` / `mbahdac.local`).
+bebas klik, lapisan gagal-diam). Syarat build: Partition Scheme
+Huge APP (tetap), tanpa library tambahan. (Proyek ini sebelumnya
+bernama MbahDAC; identitas USB & alamat masih `MbahDAC USB` /
+`mbahdac.local`).
