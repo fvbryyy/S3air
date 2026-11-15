@@ -80,7 +80,9 @@ state
 - Rilis baru dari mbah → `git pull` di PC → upload via Arduino IDE.
 - Edit lokal di PC → `git add -A && git commit -m "pesan" && git push`.
 
-Versi firmware saat ini: **v1.1.0 S3 Air — Bluetooth** (2026-11-14).
+Versi firmware saat ini: **v1.1.1 S3 Air — Bluetooth, delay line di PSRAM** (2026-11-15).
+Perbaikan boot-loop v1.1.0: keempat delay line (71 KB) dipindah dari DRAM internal ke
+PSRAM agar WiFi + kontroler Bluetooth muat bersamaan; RAM statik turun 75% → 54%.
 Server BLE (NimBLE) mencerminkan seluruh permukaan kontrol untuk mode
 lapangan: perintah teks (state/set/preset/save/wifi) + meter & spektrum
 biner 55 byte / 50 ms; bonding wajib dengan jendela pairing 60 detik

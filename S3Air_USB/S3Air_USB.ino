@@ -17,6 +17,7 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include <NimBLEDevice.h>
+#include <esp_heap_caps.h>
 #include <math.h>
 #include "dsp_types.h"
 
@@ -32,7 +33,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v1.1.0 S3 Air"
+#define FW_VERSION "v1.1.1 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -96,11 +97,32 @@ static float xfLpL = 0, xfLpR = 0;
 static const float SMOOTH_COEF = 0.002f;
 // Delay line bersama (reguler + kanal DLMS). v5.2.3: diperbesar ke 4096
 // sampel (85 ms) agar delay kanal DLMS bisa 0..80 ms; reguler tetap 0..20.
-static float dlyBufL[4096], dlyBufR[4096];
+// v1.1.1: keempat delay line (total 71 KB) dialokasikan di PSRAM, BUKAN
+// statik DRAM — sejak ada Bluetooth, DRAM internal tidak cukup untuk
+// WiFi + kontroler BT bersamaan (v1.1.0 boot-loop: "BLE_INIT: Malloc
+// failed", WiFi gagal alokasi buffer RX). Dialokasikan di awal setup()
+// oleh allocDelayLines(), sebelum audio dan radio dinyalakan.
+#define DLY_LEN 4096
+#define IN_DLY_LEN 4800
+static float *dlyBufL = nullptr, *dlyBufR = nullptr;
 static uint16_t dlyWr = 0;
 // DLMS: delay input maks 100 ms (4800 sampel) + penghalus khusus mode DLMS
-static float inDlyBufA[4800], inDlyBufB[4800];
+static float *inDlyBufA = nullptr, *inDlyBufB = nullptr;
 static uint16_t inDlyWr = 0;
+
+static float *allocDly(size_t floats) {
+  float *p = (float *)heap_caps_malloc(floats * sizeof(float),
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!p) p = (float *)malloc(floats * sizeof(float)); // cadangan terakhir: DRAM
+  if (p) memset(p, 0, floats * sizeof(float));
+  return p;
+}
+static void allocDelayLines() {
+  dlyBufL = allocDly(DLY_LEN);
+  dlyBufR = allocDly(DLY_LEN);
+  inDlyBufA = allocDly(IN_DLY_LEN);
+  inDlyBufB = allocDly(IN_DLY_LEN);
+}
 static float smInGainA = 1.0f, smInGainB = 1.0f;
 static float smChGain[2] = {1.0f, 1.0f}, smChCeil[2] = {1.0f, 1.0f};
 static float limEnv[2] = {0.0f, 0.0f}, limGainSm[2] = {1.0f, 1.0f}; // state peak-limiter kanal DLMS (v5.2.2)
@@ -538,8 +560,10 @@ static void flushDspStates() {
   memset(dlmsState, 0, sizeof(dlmsState));
   memset(dynState, 0, sizeof(dynState));
   memset(dynEnv, 0, sizeof(dynEnv));
-  memset(dlyBufL, 0, sizeof(dlyBufL)); memset(dlyBufR, 0, sizeof(dlyBufR));
-  memset(inDlyBufA, 0, sizeof(inDlyBufA)); memset(inDlyBufB, 0, sizeof(inDlyBufB));
+  if (dlyBufL) memset(dlyBufL, 0, DLY_LEN * sizeof(float));
+  if (dlyBufR) memset(dlyBufR, 0, DLY_LEN * sizeof(float));
+  if (inDlyBufA) memset(inDlyBufA, 0, IN_DLY_LEN * sizeof(float));
+  if (inDlyBufB) memset(inDlyBufB, 0, IN_DLY_LEN * sizeof(float));
   gateEnv = 0; gateGain = 1; compEnv = 0; xfLpL = xfLpR = 0;
   dcxL = dcyL = dcxR = dcyR = 0;
   statFlush++;
@@ -1622,7 +1646,10 @@ static BleSrvCb bleSrvCb;
 static BleChrCb bleChrCb;
 
 static void setupBle() {
-  NimBLEDevice::init("S3 Air");
+  bool bleOk = NimBLEDevice::init("S3 Air");
+  Serial0.printf("[BLE] init %s — heap bebas %u, blok terbesar %u\n",
+                 bleOk ? "OK" : "GAGAL", (unsigned)ESP.getFreeHeap(),
+                 (unsigned)ESP.getMaxAllocHeap());
   NimBLEDevice::setSecurityAuth(true, false, true);   // bonding, just-works, koneksi aman (SC)
   NimBLEDevice::setMTU(512);
   NimBLEServer *srv = NimBLEDevice::createServer();
@@ -1693,6 +1720,7 @@ static void blePoll() {
 void setup() {
   Serial0.begin(115200);
   delay(300);
+  allocDelayLines(); // v1.1.1: delay line ke PSRAM sebelum apa pun berjalan
   setFlat(params);
   loadStateNvs();
   setDlmsDefaults();
@@ -1710,6 +1738,8 @@ void setup() {
   loadWifiCreds();
   setupWeb();
   wifiStart();
+  Serial0.printf("[MEM] sesudah WiFi — heap bebas %u, blok terbesar %u\n",
+                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
   setupBle();
   Serial0.println("[USB] " FW_VERSION " siap — tunggu Windows memilih 'MbahDAC USB'.");
 }
