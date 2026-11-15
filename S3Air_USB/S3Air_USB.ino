@@ -33,7 +33,7 @@
 #define WIFI_PASS "ISI_PASSWORD_WIFI"
 #endif
 #define DAC_HOSTNAME "mbahdac"
-#define FW_VERSION "v1.1.1 S3 Air"
+#define FW_VERSION "v1.1.2 S3 Air"
 
 static const int PIN_BCK = 42, PIN_LRCK = 21, PIN_DIN = 2;
 static const float SAMPLE_RATE = 48000.0f;
@@ -104,11 +104,16 @@ static const float SMOOTH_COEF = 0.002f;
 // oleh allocDelayLines(), sebelum audio dan radio dinyalakan.
 #define DLY_LEN 4096
 #define IN_DLY_LEN 4800
+#define RING_FRAMES 4096
 static float *dlyBufL = nullptr, *dlyBufR = nullptr;
 static uint16_t dlyWr = 0;
 // DLMS: delay input maks 100 ms (4800 sampel) + penghalus khusus mode DLMS
 static float *inDlyBufA = nullptr, *inDlyBufB = nullptr;
 static uint16_t inDlyWr = 0;
+// Ring audio USB<->DSP (dideklarasikan di sini agar terlihat oleh
+// allocDelayLines; konteks & indeksnya di bagian RTOS bawah).
+static int16_t *ringIn = nullptr;
+static int32_t *ringOut = nullptr;   // keluaran 24-bit rata-kiri (v5.1)
 
 static float *allocDly(size_t floats) {
   float *p = (float *)heap_caps_malloc(floats * sizeof(float),
@@ -122,6 +127,15 @@ static void allocDelayLines() {
   dlyBufR = allocDly(DLY_LEN);
   inDlyBufA = allocDly(IN_DLY_LEN);
   inDlyBufB = allocDly(IN_DLY_LEN);
+  // v1.1.2: ring audio ikut ke PSRAM (total semua buffer ±120 KB di PSRAM)
+  ringIn = (int16_t *)heap_caps_malloc(RING_FRAMES * 2 * sizeof(int16_t),
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!ringIn) ringIn = (int16_t *)malloc(RING_FRAMES * 2 * sizeof(int16_t));
+  if (ringIn) memset(ringIn, 0, RING_FRAMES * 2 * sizeof(int16_t));
+  ringOut = (int32_t *)heap_caps_malloc(RING_FRAMES * 2 * sizeof(int32_t),
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!ringOut) ringOut = (int32_t *)malloc(RING_FRAMES * 2 * sizeof(int32_t));
+  if (ringOut) memset(ringOut, 0, RING_FRAMES * 2 * sizeof(int32_t));
 }
 static float smInGainA = 1.0f, smInGainB = 1.0f;
 static float smChGain[2] = {1.0f, 1.0f}, smChCeil[2] = {1.0f, 1.0f};
@@ -522,9 +536,11 @@ static bool dlmsSetKey(const String &k, float v, bool b) {
 // ============================================================
 //  RTOS: ring SPSC — callback USB ringan, DSP di task khusus Core 1
 // ============================================================
-#define RING_FRAMES 4096
-static int16_t ringIn[RING_FRAMES * 2];
-static int32_t ringOut[RING_FRAMES * 2];   // v5.1: keluaran 24-bit rata-kiri dalam kata 32-bit
+// v1.1.2: ring audio (16 KB + 32 KB) juga di PSRAM — aksesnya blok
+// sekuensial dari task USB & task DSP (bukan ISR), aman lewat cache.
+// v1.1.1 (delay line saja) belum cukup: heap sisa 9,5 KB membuat
+// asosiasi WiFi tersendat dan BLE_INIT masih Malloc failed.
+// (Pointer ringIn/ringOut dideklarasikan di atas, dekat delay line.)
 static volatile uint32_t ringInW = 0, ringInR = 0, ringOutW = 0, ringOutR = 0;
 static volatile uint32_t statUnderrun = 0, statOverflow = 0;
 static TaskHandle_t dspTaskHandle = NULL;
@@ -1115,13 +1131,24 @@ static void wifiPoll() {
   if (WiFi.status() == WL_CONNECTED) {
     if (!wasConnected) {
       wasConnected = true;
-      Serial0.printf("[WiFi] Tersambung: %s — panel di http://%s.local\n", WiFi.localIP().toString().c_str(), DAC_HOSTNAME);
+      Serial0.printf("[WiFi] Tersambung: %s — panel di http://%s.local — heap bebas %u\n", WiFi.localIP().toString().c_str(), DAC_HOSTNAME, (unsigned)ESP.getFreeHeap());
       server.enableCORS(true);  // aplikasi web (Flutter Web) boleh membaca API dari origin lain
       server.begin();
       if (MDNS.begin(DAC_HOSTNAME)) mdnsOn = true;
     }
     server.handleClient();
-  } else wasConnected = false;
+  } else {
+    wasConnected = false;
+    // v1.1.2: diagnostik asosiasi — status WiFi terlihat di serial tiap
+    // 5 detik selama belum tersambung (1=SSID tak ditemukan, 4=sandi
+    // salah, 6=masih mencoba). Diam begitu tersambung.
+    static uint32_t lastWifiLog = 0;
+    if (millis() - lastWifiLog > 5000) {
+      lastWifiLog = millis();
+      Serial0.printf("[WiFi] belum tersambung (status %d) — heap bebas %u\n",
+                     (int)WiFi.status(), (unsigned)ESP.getFreeHeap());
+    }
+  }
 }
 
 // ============================================================
@@ -1651,7 +1678,7 @@ static void setupBle() {
                  bleOk ? "OK" : "GAGAL", (unsigned)ESP.getFreeHeap(),
                  (unsigned)ESP.getMaxAllocHeap());
   NimBLEDevice::setSecurityAuth(true, false, true);   // bonding, just-works, koneksi aman (SC)
-  NimBLEDevice::setMTU(512);
+  NimBLEDevice::setMTU(247); // v1.1.2: 247 cukup (JSON mengalir per potong, meter 55 byte) & lebih hemat buffer daripada 512
   NimBLEServer *srv = NimBLEDevice::createServer();
   srv->setCallbacks(&bleSrvCb);
   NimBLEService *svc = srv->createService(BLE_SVC_UUID);
